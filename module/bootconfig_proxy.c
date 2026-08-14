@@ -39,6 +39,7 @@ struct bootconfig_slot {
 	struct file_operations proxy_ops;
 	/* 序列化同一 file 的位置转换、DSU 判断和 release。 */
 	struct mutex io_lock;
+	bool ops_initialized;
 	enum injection_decision decision;
 };
 
@@ -322,7 +323,6 @@ static int proxy_release(struct inode *inode, struct file *file)
 
 	spin_lock_irqsave(&slots_lock, flags);
 	WRITE_ONCE(slot->file, NULL);
-	slot->original_ops = NULL;
 	slot->decision = INJECTION_UNCHECKED;
 	spin_unlock_irqrestore(&slots_lock, flags);
 	mutex_unlock(&slot->io_lock);
@@ -336,6 +336,7 @@ static void attach_proxy(struct file *file)
 	const struct file_operations *original_ops;
 	struct bootconfig_slot *slot = NULL;
 	unsigned long flags;
+	bool release_module = false;
 	int index;
 
 	original_ops = READ_ONCE(file->f_op);
@@ -347,31 +348,45 @@ static void attach_proxy(struct file *file)
 	for (index = 0; index < BOOTCONFIG_SLOT_COUNT; ++index) {
 		if (slots[index].file == file)
 			goto out;
-		if (!slot && !slots[index].file)
+		if (!slot && !slots[index].file &&
+		    (!slots[index].ops_initialized ||
+		     slots[index].original_ops == original_ops))
 			slot = &slots[index];
 	}
 
 	if (!slot || !try_module_get(THIS_MODULE))
 		goto out;
 
-	slot->original_ops = original_ops;
-	memcpy(&slot->proxy_ops, original_ops, sizeof(slot->proxy_ops));
-	slot->proxy_ops.owner = THIS_MODULE;
-	if (original_ops->read)
-		slot->proxy_ops.read = proxy_read;
-	if (original_ops->read_iter)
-		slot->proxy_ops.read_iter = proxy_read_iter;
-	if (original_ops->llseek)
-		slot->proxy_ops.llseek = proxy_llseek;
-	slot->proxy_ops.release = proxy_release;
+	if (!slot->ops_initialized) {
+		slot->original_ops = original_ops;
+		memcpy(&slot->proxy_ops, original_ops,
+		       sizeof(slot->proxy_ops));
+		slot->proxy_ops.owner = THIS_MODULE;
+		if (original_ops->read)
+			slot->proxy_ops.read = proxy_read;
+		if (original_ops->read_iter)
+			slot->proxy_ops.read_iter = proxy_read_iter;
+		if (original_ops->llseek)
+			slot->proxy_ops.llseek = proxy_llseek;
+		slot->proxy_ops.release = proxy_release;
+		slot->ops_initialized = true;
+	}
 	slot->decision = INJECTION_UNCHECKED;
 	WRITE_ONCE(slot->file, file);
 	/* f_op 发布后，代理回调必须能看到上面的完整槽位状态。 */
 	smp_wmb();
-	WRITE_ONCE(file->f_op, &slot->proxy_ops);
+	if (cmpxchg(&file->f_op, original_ops, &slot->proxy_ops) !=
+	    original_ops) {
+		WRITE_ONCE(slot->file, NULL);
+		slot->decision = INJECTION_UNCHECKED;
+		release_module = true;
+		goto out;
+	}
 	atomic64_inc(&matched_files);
 out:
 	spin_unlock_irqrestore(&slots_lock, flags);
+	if (release_module)
+		module_put(THIS_MODULE);
 }
 
 static int on_vfs_read(struct kprobe *probe, struct pt_regs *registers)

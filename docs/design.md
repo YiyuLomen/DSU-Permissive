@@ -27,6 +27,7 @@ DRAINING
   │ workqueue 注销 tracepoint 与 kprobe
   ▼
 DISABLED
+  │ Hook 已全部退出
 ```
 
 在整个 `selinux_setup` 窗口内处理 PID 1 的每次 bootconfig 打开，而不是假设第一次读取一定来自 `StatusFromProperty()`。这样可容纳 init 或其库在 enforcement 决策前新增其他 bootconfig 查询。作用域仍限定为 PID 1、指定阶段和单个 `/proc/bootconfig` file。
@@ -101,7 +102,7 @@ notifier；模块不解析 `selinux_state`，也不依赖其随机化布局。
 - `user` init 的 desired=true，看到 observed=true 后不会把已经完成的
   permissive 写回 enforcing。
 
-全局原子状态确保原始 write fop 最多调用一次。模块从不 Hook
+全局原子状态确保原始 write fop 最多调用一次。模块不 Hook
 `vfs_write`；PID 1 第二次 exec `/system/bin/init` 后注销两个
 `vfs_read` kprobe，后续 `setenforce 1` 及厂商主动切回 Enforcing 均走
 原厂路径。

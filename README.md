@@ -91,6 +91,7 @@ tools/unpatch-init-boot.sh \
 
 - 设备内核必须启用模块、kprobe 与 `CONFIG_SECURITY_SELINUX_DEVELOP`，并允许加载对应签名策略下的 KO。
 - 启动期 enforce fallback 只执行一次；second-stage 后模块不会阻止手动或系统主动切回 Enforcing。
+- 产物检查会拒绝导入该设备 GKI 签名保护不允许的 `kernel_write` / `vfs_fsync` 系列符号。
 - DDK 的通用 KMI 构建成功不等同于所有厂商 6.12 内核都可运行，真机前必须核对 vermagic、符号与模块签名要求。
 - 项目不会禁用 AVB、不会签名镜像，也不会执行 fastboot/刷写命令。
 

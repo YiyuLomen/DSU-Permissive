@@ -8,6 +8,7 @@
 - Android 17 DSU `IsGsiRunning()` 与 booted 标记生命周期：<https://android.googlesource.com/platform/system/gsid/+/refs/heads/android17-release/libgsi.cpp>
 - DSU 映射后写入 booted 标记：<https://android.googlesource.com/platform/system/core/+/refs/heads/android16-release/init/first_stage_mount.cpp>
 - Android 16 6.12 `vfs_read`：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/fs/read_write.c>
+- Android 16 6.12 `__fput()` / `fops_put()` 生命周期：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/fs/file_table.c>
 - Android 16 6.12 procfs fops：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/fs/proc/inode.c>
 - Android 16 6.12 SELinux enforce fops：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/security/selinux/selinuxfs.c>
 - Android 16 6.12 exec tracepoint：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/include/trace/events/sched.h>

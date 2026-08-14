@@ -39,20 +39,30 @@ static const char *stop_reason_name(enum dsu_permissive_stop_reason reason)
 static void stop_hooks(struct work_struct *work)
 {
 	enum dsu_permissive_stop_reason reason;
+	u64 bootconfig_matches;
+	u64 bootconfig_injections;
+	u64 enforce_matches;
+	u64 force_count;
+	u64 enforce_errors;
 
 	(void)work;
+	if (atomic_read(&phase) == DSU_PHASE_DISABLED)
+		return;
 	cancel_delayed_work(&timeout_work);
 	exec_gate_unregister();
 	selinux_enforce_proxy_unregister();
 	bootconfig_proxy_unregister();
 	reason = (enum dsu_permissive_stop_reason)atomic_read(&stop_reason);
+	bootconfig_matches = bootconfig_proxy_match_count();
+	bootconfig_injections = bootconfig_proxy_injection_count();
+	enforce_matches = selinux_enforce_proxy_match_count();
+	force_count = selinux_enforce_proxy_force_count();
+	enforce_errors = selinux_enforce_proxy_error_count();
 	atomic_set(&phase, DSU_PHASE_DISABLED);
 	pr_info("dsu-permissive：Hook 已注销（%s，bootconfig 命中 %llu，注入 %llu；enforce 命中 %llu，切换 %llu，错误 %llu）\n",
-		stop_reason_name(reason), bootconfig_proxy_match_count(),
-		bootconfig_proxy_injection_count(),
-		selinux_enforce_proxy_match_count(),
-		selinux_enforce_proxy_force_count(),
-		selinux_enforce_proxy_error_count());
+		stop_reason_name(reason), bootconfig_matches,
+		bootconfig_injections, enforce_matches, force_count,
+		enforce_errors);
 }
 
 void dsu_permissive_request_stop(enum dsu_permissive_stop_reason reason)
@@ -116,12 +126,15 @@ static int __init dsu_permissive_init(void)
 
 static void __exit dsu_permissive_exit(void)
 {
+	/* 先关闭所有生产者的状态门，防止 cancel_work_sync() 后重新排队。 */
+	atomic_set(&phase, DSU_PHASE_DISABLED);
 	cancel_delayed_work_sync(&timeout_work);
 	cancel_work_sync(&stop_work);
 	exec_gate_unregister();
+	/* 同步 tracepoint 后再捕获注销期间最后一次可能的排队。 */
+	cancel_work_sync(&stop_work);
 	selinux_enforce_proxy_unregister();
 	bootconfig_proxy_unregister();
-	atomic_set(&phase, DSU_PHASE_DISABLED);
 	pr_info("dsu-permissive：模块已卸载\n");
 }
 
@@ -131,4 +144,4 @@ module_exit(dsu_permissive_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("DSU-Permissive contributors");
 MODULE_DESCRIPTION("仅在 Android DSU selinux_setup 阶段执行一次 permissive");
-MODULE_VERSION("0.2.0");
+MODULE_VERSION("0.3.2");

@@ -21,6 +21,7 @@ MODULE_UNDER_TEST=out/dsu_permissive.ko tests/test-image-roundtrip.sh
 - loader 无 `PT_INTERP`、无动态依赖、无未解析符号；
 - AOSP bootconfig 首项优先契约；
 - `user` / `userdebug` init 的 enforce fallback 状态矩阵；
+- KO 不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
 - 最小 boot header v4 镜像的 patch、verify、unpatch 往返；
 - KernelSU 的 `/init.real` 与 `/kernelsu.ko` 在往返后哈希不变。
 
