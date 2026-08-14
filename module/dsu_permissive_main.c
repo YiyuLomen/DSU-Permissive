@@ -1,0 +1,134 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#include <linux/atomic.h>
+#include <linux/init.h>
+#include <linux/jiffies.h>
+#include <linux/module.h>
+#include <linux/workqueue.h>
+
+#include "bootconfig_proxy.h"
+#include "dsu_permissive.h"
+#include "exec_gate.h"
+#include "selinux_enforce_proxy.h"
+
+#define HOOK_TIMEOUT_SECONDS 120U
+
+static atomic_t phase = ATOMIC_INIT(DSU_PHASE_WAIT_SYSTEM_INIT);
+static atomic_t stop_reason = ATOMIC_INIT(DSU_STOP_TIMEOUT);
+static struct work_struct stop_work;
+static struct delayed_work timeout_work;
+
+enum dsu_permissive_phase dsu_permissive_phase_get(void)
+{
+	return (enum dsu_permissive_phase)atomic_read(&phase);
+}
+
+bool dsu_permissive_try_arm(void)
+{
+	return atomic_cmpxchg(&phase, DSU_PHASE_WAIT_SYSTEM_INIT,
+			      DSU_PHASE_SELINUX_SETUP_ARMED) ==
+	       DSU_PHASE_WAIT_SYSTEM_INIT;
+}
+
+static const char *stop_reason_name(enum dsu_permissive_stop_reason reason)
+{
+	if (reason == DSU_STOP_SECOND_STAGE)
+		return "PID 1 已进入 second_stage";
+	return "120 秒安全超时";
+}
+
+static void stop_hooks(struct work_struct *work)
+{
+	enum dsu_permissive_stop_reason reason;
+
+	(void)work;
+	cancel_delayed_work(&timeout_work);
+	exec_gate_unregister();
+	selinux_enforce_proxy_unregister();
+	bootconfig_proxy_unregister();
+	reason = (enum dsu_permissive_stop_reason)atomic_read(&stop_reason);
+	atomic_set(&phase, DSU_PHASE_DISABLED);
+	pr_info("dsu-permissive：Hook 已注销（%s，bootconfig 命中 %llu，注入 %llu；enforce 命中 %llu，切换 %llu，错误 %llu）\n",
+		stop_reason_name(reason), bootconfig_proxy_match_count(),
+		bootconfig_proxy_injection_count(),
+		selinux_enforce_proxy_match_count(),
+		selinux_enforce_proxy_force_count(),
+		selinux_enforce_proxy_error_count());
+}
+
+void dsu_permissive_request_stop(enum dsu_permissive_stop_reason reason)
+{
+	int current_phase;
+
+	current_phase = atomic_read(&phase);
+	while (current_phase == DSU_PHASE_WAIT_SYSTEM_INIT ||
+	       current_phase == DSU_PHASE_SELINUX_SETUP_ARMED) {
+		if (atomic_try_cmpxchg(&phase, &current_phase,
+				       DSU_PHASE_DRAINING)) {
+			atomic_set(&stop_reason, reason);
+			schedule_work(&stop_work);
+			return;
+		}
+	}
+}
+
+static void on_timeout(struct work_struct *work)
+{
+	(void)work;
+	dsu_permissive_request_stop(DSU_STOP_TIMEOUT);
+}
+
+static int __init dsu_permissive_init(void)
+{
+	int error;
+
+	INIT_WORK(&stop_work, stop_hooks);
+	INIT_DELAYED_WORK(&timeout_work, on_timeout);
+
+	error = bootconfig_proxy_register();
+	if (error) {
+		pr_err("dsu-permissive：注册 bootconfig vfs_read kprobe 失败：%d\n",
+		       error);
+		return error;
+	}
+
+	error = selinux_enforce_proxy_register();
+	if (error) {
+		pr_err("dsu-permissive：注册 SELinux enforce vfs_read kprobe 失败：%d\n",
+		       error);
+		bootconfig_proxy_unregister();
+		return error;
+	}
+
+	error = exec_gate_register();
+	if (error) {
+		pr_err("dsu-permissive：注册 sched_process_exec tracepoint 失败：%d\n",
+		       error);
+		selinux_enforce_proxy_unregister();
+		bootconfig_proxy_unregister();
+		return error;
+	}
+
+	schedule_delayed_work(&timeout_work,
+			      msecs_to_jiffies(HOOK_TIMEOUT_SECONDS * 1000U));
+	pr_info("dsu-permissive：模块已加载，等待 /system/bin/init selinux_setup\n");
+	return 0;
+}
+
+static void __exit dsu_permissive_exit(void)
+{
+	cancel_delayed_work_sync(&timeout_work);
+	cancel_work_sync(&stop_work);
+	exec_gate_unregister();
+	selinux_enforce_proxy_unregister();
+	bootconfig_proxy_unregister();
+	atomic_set(&phase, DSU_PHASE_DISABLED);
+	pr_info("dsu-permissive：模块已卸载\n");
+}
+
+module_init(dsu_permissive_init);
+module_exit(dsu_permissive_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("DSU-Permissive contributors");
+MODULE_DESCRIPTION("仅在 Android DSU selinux_setup 阶段执行一次 permissive");
+MODULE_VERSION("0.2.0");

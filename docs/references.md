@@ -1,0 +1,15 @@
+# 一手参考
+
+- Android 16 init SELinux 流程：<https://android.googlesource.com/platform/system/core/+/refs/heads/android16-release/init/selinux.cpp>
+- Android 16 init `ALLOW_PERMISSIVE_SELINUX` 构建开关：<https://android.googlesource.com/platform/system/core/+/refs/heads/android16-release/init/Android.bp>
+- Android 主线 init SELinux 流程：<https://android.googlesource.com/platform/system/core/+/refs/heads/main/init/selinux.cpp>
+- fs_mgr bootconfig 首项解析：<https://android.googlesource.com/platform/system/core/+/refs/heads/android16-release/fs_mgr/libfstab/boot_config.cpp>
+- Android 16 DSU `IsGsiRunning()` 与 booted 标记生命周期：<https://android.googlesource.com/platform/system/gsid/+/refs/heads/android16-release/libgsi.cpp>
+- Android 17 DSU `IsGsiRunning()` 与 booted 标记生命周期：<https://android.googlesource.com/platform/system/gsid/+/refs/heads/android17-release/libgsi.cpp>
+- DSU 映射后写入 booted 标记：<https://android.googlesource.com/platform/system/core/+/refs/heads/android16-release/init/first_stage_mount.cpp>
+- Android 16 6.12 `vfs_read`：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/fs/read_write.c>
+- Android 16 6.12 procfs fops：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/fs/proc/inode.c>
+- Android 16 6.12 SELinux enforce fops：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/security/selinux/selinuxfs.c>
+- Android 16 6.12 exec tracepoint：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/include/trace/events/sched.h>
+- KernelSU `ksuinit` 入口：<https://github.com/tiann/KernelSU/blob/main/userspace/ksuinit/src/main.rs>
+- KernelSU init 重建逻辑：<https://github.com/tiann/KernelSU/blob/main/userspace/ksuinit/src/init.rs>
