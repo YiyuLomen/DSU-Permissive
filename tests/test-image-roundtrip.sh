@@ -88,4 +88,4 @@ done
 [[ "$(sha256sum restored-init | awk '{print $1}')" == "$original_init_sha256" ]]
 [[ "$(sha256sum restored-init.real | awk '{print $1}')" == "$original_real_sha256" ]]
 [[ "$(sha256sum restored-kernelsu.ko | awk '{print $1}')" == "$original_ksu_sha256" ]]
-echo "init_boot 补丁/还原往返测试通过"
+echo "boot/init_boot 补丁/还原往返测试通过"

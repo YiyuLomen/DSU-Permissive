@@ -7,6 +7,16 @@ cd "$root_dir"
 for script in tools/*.sh tests/*.sh; do
     bash -n "$script"
 done
+expected_targets=$'android15-6.6\nandroid14-6.1\nandroid13-5.15\nandroid12-5.10\nandroid16-6.12'
+actual_targets=$(tools/build.sh --list-targets | cut -f1)
+if [[ "$actual_targets" != "$expected_targets" ]]; then
+    echo "错误：DDK 支持矩阵与预期不一致" >&2
+    exit 1
+fi
+if tools/build.sh --target android11-5.4 >/dev/null 2>&1; then
+    echo "错误：构建脚本接受了非支持的 GKI target" >&2
+    exit 1
+fi
 python3 tests/make-test-init-boot.py --help >/dev/null
 python3 tests/test-avb-header-range.py
 python3 tests/test-bootconfig-parser.py

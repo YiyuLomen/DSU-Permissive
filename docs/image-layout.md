@@ -1,4 +1,6 @@
-# init_boot 布局
+# boot/init_boot ramdisk 布局
+
+Android 12 出厂设备的通用 ramdisk 位于 `boot.img`；Android 13 及以上出厂设备通常将其放在 `init_boot.img`。下述逻辑要求输入镜像的 ramdisk 中存在首个 `/init`，与镜像文件名无关。
 
 ## KernelSU 补丁后的输入
 
@@ -32,4 +34,3 @@ patch 工具把输入镜像作为 repack 模板，所有操作在独立临时目
 - loader/KO 不是预期的 AArch64 ELF 产物。
 
 unpatch 工具根据元数据验证原 init、loader 和 KO 的 SHA-256，再恢复 `/init.next → /init`。由于 magiskboot 可能重新压缩 ramdisk，“可逆”指条目与内容逻辑还原，不承诺输出镜像与原输入逐字节一致。
-

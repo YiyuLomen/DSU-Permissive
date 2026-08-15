@@ -14,6 +14,7 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
+#include <linux/version.h>
 #include <linux/workqueue.h>
 
 #include <asm/ptrace.h>
@@ -255,6 +256,12 @@ static ssize_t read_original(struct vbmeta_slot *slot, struct file *file,
 			     loff_t *position)
 {
 	struct iov_iter iter;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
+	struct iovec iov = {
+		.iov_base = buffer,
+		.iov_len = count,
+	};
+#endif
 	struct kiocb kiocb;
 	ssize_t result;
 
@@ -266,7 +273,11 @@ static ssize_t read_original(struct vbmeta_slot *slot, struct file *file,
 	/* 与内核 new_sync_read() 一致，把 vfs_read 的直缓冲区交给原 read_iter。 */
 	init_sync_kiocb(&kiocb, file);
 	kiocb.ki_pos = position ? *position : 0;
-	iov_iter_ubuf(&iter, ITER_DEST, buffer, count);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+	iov_iter_ubuf(&iter, READ, buffer, count);
+#else
+	iov_iter_init(&iter, READ, &iov, 1, count);
+#endif
 	result = slot->original_ops->read_iter(&kiocb, &iter);
 	if (WARN_ON_ONCE(result == -EIOCBQUEUED)) {
 		atomic64_inc(&proxy_errors);

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-    echo "用法：$0 --input <已补丁镜像.img> [--magiskboot <路径>]" >&2
+    echo "用法：$0 --input <已补丁 boot/init_boot 镜像.img> [--magiskboot <路径>]" >&2
 }
 
 metadata_value() {
@@ -84,4 +84,3 @@ fi
 echo "验证通过：$input"
 echo "init 链：$chain"
 echo "原 init SHA-256：$actual_original"
-

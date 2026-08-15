@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-    echo "用法：$0 --input <init_boot.img> --output <新镜像.img> --loader <dsuinit> --module <dsu_permissive.ko> [--magiskboot <路径>]" >&2
+    echo "用法：$0 --input <boot.img|init_boot.img> --output <新镜像.img> --loader <dsuinit> --module <dsu_permissive.ko> [--magiskboot <路径>]" >&2
 }
 
 input=""

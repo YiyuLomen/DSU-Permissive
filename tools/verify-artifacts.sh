@@ -2,17 +2,19 @@
 set -euo pipefail
 
 usage() {
-    echo "用法：$0 [--loader <dsuinit>] [--module <dsu_permissive.ko>]" >&2
+    echo "用法：$0 [--loader <dsuinit>] [--module <dsu_permissive.ko>] [--target <DDK target>]" >&2
 }
 
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 loader="$root_dir/out/dsuinit"
 module="$root_dir/out/dsu_permissive.ko"
+target=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --loader) loader="${2:-}"; shift 2 ;;
         --module) module="${2:-}"; shift 2 ;;
+        --target) target="${2:-}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "错误：未知参数 $1" >&2; usage; exit 2 ;;
     esac
@@ -57,6 +59,18 @@ if ! grep -q 'vermagic=' <<<"$module_modinfo"; then
     echo "错误：内核模块缺少 vermagic" >&2
     exit 1
 fi
+if [[ -n "$target" ]]; then
+    expected_kernel=${target#*-}
+    if [[ "$expected_kernel" == "$target" ]]; then
+        echo "错误：DDK target 格式无效：$target" >&2
+        exit 2
+    fi
+    expected_kernel_regex=${expected_kernel//./\\.}
+    if ! grep -Eq "vermagic=${expected_kernel_regex}([.-]|$)" <<<"$module_modinfo"; then
+        echo "错误：模块 vermagic 与 DDK target $target 不匹配" >&2
+        exit 1
+    fi
+fi
 
 module_undefined=$(llvm-nm -u "$module" | awk '{print $2}')
 for protected_symbol in \
@@ -71,3 +85,6 @@ done
 echo "产物验证通过："
 echo "  loader：$loader"
 echo "  module：$module"
+if [[ -n "$target" ]]; then
+    echo "  target：$target"
+fi

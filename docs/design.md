@@ -4,7 +4,7 @@
 
 目标是在 DSU 已经完成映射后完成两件事：先在 first-stage 的 AVB 复验窗口内，只向 PID 1 临时呈现带 `VERIFICATION_DISABLED` 标志的顶层 vbmeta；再在 SELinux enforcement 尚未由 init 最终确定的窗口内，优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不写磁盘 vbmeta，不伪造 verified boot 状态，不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
 
-模块只支持 arm64 `android16-6.12`。Android 16 release 与当前 Android 主线中的 init 均在加载 policy 后调用 `SelinuxSetEnforcement()`，并通过 fs_mgr 读取 cmdline/bootconfig；fs_mgr 对重复 bootconfig 键采用第一项。
+模块只支持 arm64 GKI，以及 `android12-5.10`、`android13-5.15`、`android14-6.1`、`android15-6.6`、`android16-6.12` 五个 DDK target。对应的 AOSP Android 12 至 Android 16 init 均在加载 policy 后调用 `SelinuxSetEnforcement()`，并通过 fs_mgr 读取 cmdline/bootconfig；fs_mgr 对重复 bootconfig 键采用第一项。Android 11 及以下和非 GKI 内核不在支持范围内。
 
 ## 状态机
 
@@ -51,13 +51,13 @@ AVB 代理必须在 `WAIT_SYSTEM_INIT` 生效：目标设备日志中的顶层 v
 
 不能比较打开后的 dentry 名，因为 by-name 符号链接通常会落到 `sdeNN` 等真实节点；也不硬编码 major/minor 或访问非稳定的块层内部结构。`vfs_read` kprobe pre-handler 只执行阶段、PID、块设备类型和缓存 `dev_t` 比较，不在 kprobe 上下文中调用 `kern_path()` 或访问用户内存。
 
-AOSP `libfs_avb` 通过 `pread64(offset=0)` 读取顶层 vbmeta。Android 6.12 的默认块设备 fops 只有 `read_iter`，因此代理完整复制原 fops 后只覆盖：
+AOSP `libfs_avb` 通过 `pread64(offset=0)` 读取顶层 vbmeta。支持的 GKI 默认块设备路径使用 `read_iter`，代理仍同时接受原 fops 提供旧式 `read` 的情况，并在完整复制原 fops 后只覆盖：
 
 - `owner = THIS_MODULE`；
 - `read = proxy_read`；
 - `release = proxy_release`。
 
-当前 `vfs_read` 在 kprobe 返回后会优先进入代理 `read`。wrapper 按内核 `new_sync_read()` 的方式构造同步 `kiocb` 与 `ITER_DEST`，再通过保存的原 `read_iter` 函数指针完成真实读取。代理保留原 `read_iter`，所以 readv、io_uring 等非目标路径不会被扩展为 AVB 旁路。
+当前 `vfs_read` 在 kprobe 返回后会优先进入代理 `read`。wrapper 按内核 `new_sync_read()` 的方式构造同步 `kiocb`：6.1 及以上使用 `iov_iter_ubuf()`，5.10/5.15 使用单段 `iovec` 与 `iov_iter_init()`，再通过保存的原 `read_iter` 函数指针完成真实读取。代理保留原 `read_iter`，所以 readv、io_uring 等非目标路径不会被扩展为 AVB 旁路。
 
 真实读取完成后，普通进程上下文再次确认：
 
@@ -91,7 +91,7 @@ AOSP `libfs_avb` 通过 `pread64(offset=0)` 读取顶层 vbmeta。Android 6.12 �
 - 从预分配槽位复制原 `file_operations`；
 - 将当前 `struct file` 的 `f_op` 切到代理。
 
-Android 6.12 的 `/proc/bootconfig` 由 procfs `read_iter` 路径提供，因此代理同时兼容原 fops 的 `read_iter` 和旧式 `read`，并代理 `llseek` 与 `release`。代理槽位在模块初始化时静态分配，kprobe 上下文不分配内存。
+支持的 GKI 均提供 `/proc/bootconfig`。代理同时兼容原 fops 的 `read_iter` 和旧式 `read`，并代理 `llseek` 与 `release`。代理槽位在模块初始化时静态分配，kprobe 上下文不分配内存。
 
 真正的 DSU 检查在代理 read 的普通进程上下文执行，可安全调用 VFS 路径查找。只有以下 AOSP DSU 运行标记存在时才启用注入：
 
@@ -122,7 +122,7 @@ androidboot.selinux = "permissive"\n
 
 ## selinuxfs enforce 启动期 fallback
 
-AOSP Android 16/17 的 `user` init 默认以 `ALLOW_PERMISSIVE_SELINUX=0`
+AOSP Android 12 及以上的 `user` init 默认以 `ALLOW_PERMISSIVE_SELINUX=0`
 编译。此时 `IsEnforcing()` 无条件返回 true，即使 bootconfig 注入成功也
 不会调用 `security_setenforce(false)`。
 
@@ -159,6 +159,7 @@ fs_mgr 的 `GetBootconfigFromString()` 在首次找到目标 key 后不再覆盖
 ## 失败策略
 
 - KO 打开或加载失败：`dsuinit`记录错误并继续原 init 链。
+- KO 与设备 GKI/KMI target 不匹配：内核拒绝加载，`dsuinit`记录错误并继续原 init 链。
 - `/init.next` 执行失败：依次尝试 `/init.real` 与 `/system/bin/init`，所有失败均记录。
 - tracepoint 或 kprobe 注册失败：KO 加载失败并保留明确内核日志，系统启动仍由 loader 继续。
 - vbmeta by-name 路径未及时解析或目标 read 未命中：不修改任何块设备数据，`libfs_avb` 按原始结果继续。

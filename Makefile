@@ -6,7 +6,7 @@ OUT_DIR := $(CURDIR)/out
 all: module loader
 
 module:
-	@test -n "$(KDIR)" || { echo "错误：未设置 KDIR，请通过 ddk build android16-6.12 构建" >&2; exit 1; }
+	@test -n "$(KDIR)" || { echo "错误：未设置 KDIR，请通过 tools/build.sh --target <DDK target> 构建" >&2; exit 1; }
 	$(MAKE) -C "$(KDIR)" M="$(CURDIR)/module" modules
 	mkdir -p "$(OUT_DIR)"
 	cp -f module/dsu_permissive.ko "$(OUT_DIR)/dsu_permissive.ko"
@@ -25,4 +25,3 @@ clean:
 	fi
 	$(MAKE) -C loader clean
 	rm -f "$(OUT_DIR)/dsu_permissive.ko" "$(OUT_DIR)/dsuinit"
-

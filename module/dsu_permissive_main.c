@@ -80,12 +80,16 @@ void dsu_permissive_request_stop(enum dsu_permissive_stop_reason reason)
 	current_phase = atomic_read(&phase);
 	while (current_phase == DSU_PHASE_WAIT_SYSTEM_INIT ||
 	       current_phase == DSU_PHASE_SELINUX_SETUP_ARMED) {
-		if (atomic_try_cmpxchg(&phase, &current_phase,
-				       DSU_PHASE_DRAINING)) {
+		int observed_phase;
+
+		observed_phase = atomic_cmpxchg(&phase, current_phase,
+					DSU_PHASE_DRAINING);
+		if (observed_phase == current_phase) {
 			atomic_set(&stop_reason, reason);
 			schedule_work(&stop_work);
 			return;
 		}
+		current_phase = observed_phase;
 	}
 }
 

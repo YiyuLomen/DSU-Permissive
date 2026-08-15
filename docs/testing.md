@@ -12,7 +12,8 @@ tests/test-image-roundtrip.sh
 DDK 产物存在时，可让往返测试直接注入真实 KO：
 
 ```bash
-MODULE_UNDER_TEST=out/dsu_permissive.ko tests/test-image-roundtrip.sh
+MODULE_UNDER_TEST=out/android15-6.6/dsu_permissive.ko \
+  tests/test-image-roundtrip.sh
 ```
 
 覆盖内容：
@@ -27,16 +28,33 @@ MODULE_UNDER_TEST=out/dsu_permissive.ko tests/test-image-roundtrip.sh
 - SELinux setup 只覆盖 `androidboot.selinux`，verified boot 状态保持原值，second-stage 恢复完整原始视图；
 - `user` / `userdebug` init 的 enforce fallback 状态矩阵；
 - KO 不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
-- 最小 boot header v4 镜像的 patch、verify、unpatch 往返；
+- 可代表 Android 12 `boot.img` 或 Android 13 及以上 `init_boot.img` 的最小 boot header v4 镜像往返；
 - KernelSU 的 `/init.real` 与 `/kernelsu.ko` 在往返后哈希不变。
 
-完整 DDK 构建：
+默认回归构建 `android16-6.12`：
 
 ```bash
 tools/build.sh
 ```
 
-`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo 与 vermagic。
+构建指定 target 或完整支持矩阵：
+
+```bash
+tools/build.sh --target android15-6.6
+tools/build.sh --all
+```
+
+完整矩阵包括：
+
+| DDK target | 最低出厂 Android |
+| --- | --- |
+| `android16-6.12` | Android 16 |
+| `android15-6.6` | Android 15 |
+| `android14-6.1` | Android 14 |
+| `android13-5.15` | Android 13 |
+| `android12-5.10` | Android 12 |
+
+KO 输出到 `out/<DDK target>/dsu_permissive.ko`。`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo、vermagic，以及 vermagic 是否与指定 target 的内核版本一致。
 
 AVB Python 测试固定的是主机端行为契约，不会执行内核中的 C 回调。实际 fops、kprobe、KMI 和用户缓冲区路径仍必须由 DDK 构建与真机日志验证。
 
@@ -48,7 +66,7 @@ AVB Python 测试固定的是主机端行为契约，不会执行内核中的 C 
 2. 设备允许加载该 KO，且 vermagic/KMI/模块签名匹配；
 3. 已保留可恢复的原镜像和可用的 bootloader/recovery 路径；
 4. bootloader 已报告 `verifiedbootstate=orange`，并且未创建 `/metadata/gsi/dsu/avb_enforce`；
-5. 外部启动链已经允许当前 `init_boot` 启动。
+5. 外部启动链已经允许当前 `boot` 或 `init_boot` 镜像启动。
 
 ## 预期真机结果
 
@@ -89,4 +107,4 @@ adb shell getenforce
 
 结果必须为 `Enforcing`。还应验证正常系统与 DSU 各自至少冷启动一次，并确认 KernelSU 仍可用。只有主机端构建和镜像往返通过，不能代替以上真机验证。
 
-`vfs_read` 依赖运行时 kprobe 符号解析，且厂商内核的 vermagic、BTF、符号版本与模块签名策略可能不同。即使 DDK 构建成功，也不能据此声称已完成真机兼容验证。
+`vfs_read` 依赖运行时 kprobe 符号解析，且同版本厂商 GKI 的 vermagic、BTF、符号版本与模块签名策略仍可能不同。即使五个 DDK target 全部构建成功，也不能据此声称已完成真机兼容验证。非 GKI 内核不在验证或支持范围内。

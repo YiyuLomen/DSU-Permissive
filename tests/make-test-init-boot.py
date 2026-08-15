@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成仅用于主机端往返测试的最小 Android boot header v4 镜像。"""
+"""生成用于主机端往返测试的最小 Android boot header v4 镜像。"""
 
 from __future__ import annotations
 
@@ -39,4 +39,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
