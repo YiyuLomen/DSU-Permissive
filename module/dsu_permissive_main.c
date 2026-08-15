@@ -9,6 +9,7 @@
 #include "dsu_permissive.h"
 #include "exec_gate.h"
 #include "selinux_enforce_proxy.h"
+#include "vbmeta_proxy.h"
 
 #define HOOK_TIMEOUT_SECONDS 120U
 
@@ -41,6 +42,9 @@ static void stop_hooks(struct work_struct *work)
 	enum dsu_permissive_stop_reason reason;
 	u64 bootconfig_matches;
 	u64 bootconfig_injections;
+	u64 vbmeta_matches;
+	u64 vbmeta_patches;
+	u64 vbmeta_errors;
 	u64 enforce_matches;
 	u64 force_count;
 	u64 enforce_errors;
@@ -50,19 +54,23 @@ static void stop_hooks(struct work_struct *work)
 		return;
 	cancel_delayed_work(&timeout_work);
 	exec_gate_unregister();
+	vbmeta_proxy_unregister();
 	selinux_enforce_proxy_unregister();
 	bootconfig_proxy_unregister();
 	reason = (enum dsu_permissive_stop_reason)atomic_read(&stop_reason);
 	bootconfig_matches = bootconfig_proxy_match_count();
 	bootconfig_injections = bootconfig_proxy_injection_count();
+	vbmeta_matches = vbmeta_proxy_match_count();
+	vbmeta_patches = vbmeta_proxy_patch_count();
+	vbmeta_errors = vbmeta_proxy_error_count();
 	enforce_matches = selinux_enforce_proxy_match_count();
 	force_count = selinux_enforce_proxy_force_count();
 	enforce_errors = selinux_enforce_proxy_error_count();
 	atomic_set(&phase, DSU_PHASE_DISABLED);
-	pr_info("dsu-permissive：Hook 已注销（%s，bootconfig 命中 %llu，注入 %llu；enforce 命中 %llu，切换 %llu，错误 %llu）\n",
-		stop_reason_name(reason), bootconfig_matches,
-		bootconfig_injections, enforce_matches, force_count,
-		enforce_errors);
+	pr_info("dsu-permissive：Hook 已注销（%s，vbmeta 命中 %llu，修改 %llu，错误 %llu；bootconfig 命中 %llu，注入 %llu；enforce 命中 %llu，切换 %llu，错误 %llu）\n",
+		stop_reason_name(reason), vbmeta_matches, vbmeta_patches,
+		vbmeta_errors, bootconfig_matches, bootconfig_injections,
+		enforce_matches, force_count, enforce_errors);
 }
 
 void dsu_permissive_request_stop(enum dsu_permissive_stop_reason reason)
@@ -101,10 +109,19 @@ static int __init dsu_permissive_init(void)
 		return error;
 	}
 
+	error = vbmeta_proxy_register();
+	if (error) {
+		pr_err("dsu-permissive：注册 vbmeta vfs_read kprobe 失败：%d\n",
+		       error);
+		bootconfig_proxy_unregister();
+		return error;
+	}
+
 	error = selinux_enforce_proxy_register();
 	if (error) {
 		pr_err("dsu-permissive：注册 SELinux enforce vfs_read kprobe 失败：%d\n",
 		       error);
+		vbmeta_proxy_unregister();
 		bootconfig_proxy_unregister();
 		return error;
 	}
@@ -114,13 +131,14 @@ static int __init dsu_permissive_init(void)
 		pr_err("dsu-permissive：注册 sched_process_exec tracepoint 失败：%d\n",
 		       error);
 		selinux_enforce_proxy_unregister();
+		vbmeta_proxy_unregister();
 		bootconfig_proxy_unregister();
 		return error;
 	}
 
 	schedule_delayed_work(&timeout_work,
 			      msecs_to_jiffies(HOOK_TIMEOUT_SECONDS * 1000U));
-	pr_info("dsu-permissive：模块已加载，等待 /system/bin/init selinux_setup\n");
+	pr_info("dsu-permissive：模块已加载，等待 first-stage DSU AVB 与 selinux_setup\n");
 	return 0;
 }
 
@@ -134,6 +152,7 @@ static void __exit dsu_permissive_exit(void)
 	/* 同步 tracepoint 后再捕获注销期间最后一次可能的排队。 */
 	cancel_work_sync(&stop_work);
 	selinux_enforce_proxy_unregister();
+	vbmeta_proxy_unregister();
 	bootconfig_proxy_unregister();
 	pr_info("dsu-permissive：模块已卸载\n");
 }
@@ -143,5 +162,5 @@ module_exit(dsu_permissive_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("DSU-Permissive contributors");
-MODULE_DESCRIPTION("仅在 Android DSU selinux_setup 阶段执行一次 permissive");
-MODULE_VERSION("0.3.2");
+MODULE_DESCRIPTION("仅在 Android DSU first-stage 临时处理 AVB 与 permissive");
+MODULE_VERSION("0.4.0");

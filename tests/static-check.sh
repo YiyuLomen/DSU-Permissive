@@ -8,6 +8,7 @@ for script in tools/*.sh tests/*.sh; do
     bash -n "$script"
 done
 python3 tests/make-test-init-boot.py --help >/dev/null
+python3 tests/test-avb-header-range.py
 python3 tests/test-bootconfig-parser.py
 python3 tests/test-enforcement-flow.py
 make -C loader clean all

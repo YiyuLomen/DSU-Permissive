@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-目标是在 DSU 已经完成映射、但 SELinux enforcement 尚未由 init 最终确定的窗口内，优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
+目标是在 DSU 已经完成映射后完成两件事：先在 first-stage 的 AVB 复验窗口内，只向 PID 1 临时呈现带 `VERIFICATION_DISABLED` 标志的顶层 vbmeta；再在 SELinux enforcement 尚未由 init 最终确定的窗口内，优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不写磁盘 vbmeta，不伪造 verified boot 状态，不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
 
 模块只支持 arm64 `android16-6.12`。Android 16 release 与当前 Android 主线中的 init 均在加载 policy 后调用 `SelinuxSetEnforcement()`，并通过 fs_mgr 读取 cmdline/bootconfig；fs_mgr 对重复 bootconfig 键采用第一项。
 
@@ -10,6 +10,10 @@
 
 ```text
 WAIT_SYSTEM_INIT
+  │ 后台解析 by-name/vbmeta[_a|_b] 的块设备 dev_t
+  │ PID 1 读取目标块设备，且 DSU booted 标记存在
+  │ avb_enforce 不存在时，仅修改返回缓冲区的 flags
+  │ 磁盘内容与其他进程视图保持不变
   │ PID 1 第一次 exec /system/bin/init
   ▼
 SELINUX_SETUP_ARMED
@@ -30,7 +34,44 @@ DISABLED
   │ Hook 已全部退出
 ```
 
+AVB 代理必须在 `WAIT_SYSTEM_INIT` 生效：目标设备日志中的顶层 vbmeta 处理发生在约 `0.603s`，而 PID 1 第一次 exec `/system/bin/init`、进入 `SELINUX_SETUP_ARMED` 是约 `0.628s`。阶段切换后，即使目标 file 尚未关闭，代理 read wrapper 也只透传原始内容。
+
 在整个 `selinux_setup` 窗口内处理 PID 1 的每次 bootconfig 打开，而不是假设第一次读取一定来自 `StatusFromProperty()`。这样可容纳 init 或其库在 enforcement 决策前新增其他 bootconfig 查询。作用域仍限定为 PID 1、指定阶段和单个 `/proc/bootconfig` file。
+
+## vbmeta fops 代理
+
+`vbmeta_proxy.c` 用 delayed work 在普通内核上下文中轮询解析以下符号链接，并保存最终块设备 inode 的 `dev_t`：
+
+```text
+/dev/block/by-name/vbmeta
+/dev/block/by-name/vbmeta_a
+/dev/block/by-name/vbmeta_b
+/dev/block/bootdevice/by-name/vbmeta[_a|_b]
+```
+
+不能比较打开后的 dentry 名，因为 by-name 符号链接通常会落到 `sdeNN` 等真实节点；也不硬编码 major/minor 或访问非稳定的块层内部结构。`vfs_read` kprobe pre-handler 只执行阶段、PID、块设备类型和缓存 `dev_t` 比较，不在 kprobe 上下文中调用 `kern_path()` 或访问用户内存。
+
+AOSP `libfs_avb` 通过 `pread64(offset=0)` 读取顶层 vbmeta。Android 6.12 的默认块设备 fops 只有 `read_iter`，因此代理完整复制原 fops 后只覆盖：
+
+- `owner = THIS_MODULE`；
+- `read = proxy_read`；
+- `release = proxy_release`。
+
+当前 `vfs_read` 在 kprobe 返回后会优先进入代理 `read`。wrapper 按内核 `new_sync_read()` 的方式构造同步 `kiocb` 与 `ITER_DEST`，再通过保存的原 `read_iter` 函数指针完成真实读取。代理保留原 `read_iter`，所以 readv、io_uring 等非目标路径不会被扩展为 AVB 旁路。
+
+真实读取完成后，普通进程上下文再次确认：
+
+- 当前仍为 `WAIT_SYSTEM_INIT` 且 PID 为 1；
+- `/metadata/gsi/dsu/booted` 存在；
+- `/metadata/gsi/dsu/avb_enforce` 不存在；
+- 返回缓冲区开头是 `AVB0`；
+- 实际返回区间包含 flags 的目标字节。
+
+`AvbVBMetaImageHeader.flags` 位于 `[120,124)`，序列化时使用网络字节序。`AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED` 是 `1 << 1`，因此代理只对绝对偏移 `123` 的原字节执行 `OR 0x02`。例如 `0x80000001` 变为 `0x80000003`，其他位不会被覆盖。修改发生在用户读取缓冲区，磁盘分区、页缓存中的源数据和其他进程视图均不改变。
+
+修改 flags 会使 vbmeta 的签名或 bootloader 提供的摘要不再匹配。该路径依赖解锁设备已经由 bootloader 报告 `verifiedbootstate=orange`，让 `libfs_avb` 接受验证错误并继续把修改后的顶层 header 识别为 `VerificationDisabled`。模块不修改 `/proc/bootconfig` 中的 verified boot 字段；若 `avb_enforce` 存在，则拒绝修改并记录错误，避免在强制验证模式下把启动变成硬失败。
+
+顶层状态为 `VerificationDisabled` 后，同一个 `AvbHandle` 管理的分区都会跳过 Hashtree，包括本次 DSU 启动涉及的宿主 vendor、odm 等条目，不仅是 DSU system。该影响仅存在于本次 first-stage 的内存视图，正常启动仍使用磁盘上的真实 vbmeta。
 
 ## exec 门控
 
@@ -43,7 +84,7 @@ DISABLED
 
 ## bootconfig fops 代理
 
-`bootconfig_proxy.c` 在 `vfs_read` 入口安装 kprobe。pre-handler 不执行路径查找或其他可睡眠操作，只完成：
+`bootconfig_proxy.c` 在 `vfs_read` 入口安装 kprobe，并且只在 `SELINUX_SETUP_ARMED` 阶段工作。pre-handler 不执行路径查找或其他可睡眠操作，只完成：
 
 - 状态与 PID 检查；
 - `PROC_SUPER_MAGIC`、根 dentry 和 `bootconfig` 文件名检查；
@@ -77,6 +118,8 @@ androidboot.selinux = "permissive"\n
 
 代理 fops 的 owner 指向本模块。附加时取得模块引用，`__fput()` 在代理 `release` 返回后释放该引用，避免 file 尚未关闭时卸载模块代码。原 procfs fops 必须属于内核本体（owner 为空），否则拒绝附加。
 
+该代理只注入 `androidboot.selinux=permissive`，不会修改 `androidboot.verifiedbootstate` 或 `androidboot.vbmeta.device_state`。second-stage 注销后读取到的仍是原始 bootconfig。
+
 ## selinuxfs enforce 启动期 fallback
 
 AOSP Android 16/17 的 `user` init 默认以 `ALLOW_PERMISSIVE_SELINUX=0`
@@ -103,7 +146,7 @@ notifier；模块不解析 `selinux_state`，也不依赖其随机化布局。
   permissive 写回 enforcing。
 
 全局原子状态确保原始 write fop 最多调用一次。模块不 Hook
-`vfs_write`；PID 1 第二次 exec `/system/bin/init` 后注销两个
+`vfs_write`；PID 1 第二次 exec `/system/bin/init` 后注销三个
 `vfs_read` kprobe，后续 `setenforce 1` 及厂商主动切回 Enforcing 均走
 原厂路径。
 
@@ -118,6 +161,10 @@ fs_mgr 的 `GetBootconfigFromString()` 在首次找到目标 key 后不再覆盖
 - KO 打开或加载失败：`dsuinit`记录错误并继续原 init 链。
 - `/init.next` 执行失败：依次尝试 `/init.real` 与 `/system/bin/init`，所有失败均记录。
 - tracepoint 或 kprobe 注册失败：KO 加载失败并保留明确内核日志，系统启动仍由 loader 继续。
+- vbmeta by-name 路径未及时解析或目标 read 未命中：不修改任何块设备数据，`libfs_avb` 按原始结果继续。
+- 设备不是 `orange`：模块不会伪造该状态；修改后的签名错误可能不被接受，因此不满足使用前提。
+- `/metadata/gsi/dsu/avb_enforce` 存在：拒绝修改 vbmeta 返回视图并记录错误。
+- vbmeta 魔数不匹配或用户缓冲区修改失败：保留原 read 返回值、记录错误，`libfs_avb` 看到原始数据。
 - DSU booted 标记不存在：读取原 bootconfig，不注入。
 - 原始 enforce write fop 不存在或调用失败：保留原始 enforce 读值并记录错误，系统继续以原状态启动。
 - 120 秒内未完成阶段切换：注销 Hook。

@@ -5,6 +5,7 @@
 #include "dsu_detect.h"
 
 #define DSU_BOOTED_MARKER "/metadata/gsi/dsu/booted"
+#define DSU_AVB_ENFORCE_MARKER "/metadata/gsi/dsu/avb_enforce"
 
 static bool path_exists(const char *name)
 {
@@ -24,4 +25,9 @@ bool dsu_detect_active(void)
 	 * 映射成功后重新创建该标记；这也是 IsGsiRunning() 的唯一条件。
 	 */
 	return path_exists(DSU_BOOTED_MARKER);
+}
+
+bool dsu_detect_avb_enforced(void)
+{
+	return path_exists(DSU_AVB_ENFORCE_MARKER);
 }

@@ -15,17 +15,26 @@ def get_bootconfig(bootconfig: str, wanted: str) -> str | None:
 
 
 def main() -> None:
-    content = (
-        'androidboot.selinux = "permissive"\n'
-        'androidboot.hardware = "test"\n'
+    original = (
+        'androidboot.verifiedbootstate = "orange"\n'
         'androidboot.selinux = "enforcing"\n'
+        'androidboot.hardware = "test"\n'
     )
-    assert get_bootconfig(content, "androidboot.selinux") == "permissive"
-    assert get_bootconfig(content, "androidboot.hardware") == "test"
-    assert get_bootconfig(content, "missing") is None
+    selinux_setup_view = 'androidboot.selinux = "permissive"\n' + original
+
+    assert get_bootconfig(selinux_setup_view, "androidboot.selinux") == "permissive"
+    assert (
+        get_bootconfig(selinux_setup_view, "androidboot.verifiedbootstate")
+        == "orange"
+    )
+    assert get_bootconfig(selinux_setup_view, "androidboot.hardware") == "test"
+    assert get_bootconfig(selinux_setup_view, "missing") is None
+
+    # second-stage 注销代理后，所有键都恢复为原始 bootconfig 视图。
+    assert get_bootconfig(original, "androidboot.selinux") == "enforcing"
+    assert get_bootconfig(original, "androidboot.verifiedbootstate") == "orange"
     print("bootconfig 首项优先契约测试通过")
 
 
 if __name__ == "__main__":
     main()
-

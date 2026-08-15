@@ -5,6 +5,6 @@
 #include <linux/types.h>
 
 bool dsu_detect_active(void);
+bool dsu_detect_avb_enforced(void);
 
 #endif
-
