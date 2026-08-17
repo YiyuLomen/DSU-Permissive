@@ -21,7 +21,9 @@
 - Android 16 6.12 SELinux enforce fops：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/security/selinux/selinuxfs.c>
 - Android 16 6.12 exec tracepoint：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/include/trace/events/sched.h>
 - Android 12 5.10 `iov_iter` API：<https://android.googlesource.com/kernel/common/+/refs/heads/android12-5.10/include/linux/uio.h>
+- Android 13 5.10 `iov_iter` API：<https://android.googlesource.com/kernel/common/+/refs/heads/android13-5.10/include/linux/uio.h>
 - Android 13 5.15 `iov_iter` API：<https://android.googlesource.com/kernel/common/+/refs/heads/android13-5.15/include/linux/uio.h>
+- Android 14 5.15 `iov_iter` API：<https://android.googlesource.com/kernel/common/+/refs/heads/android14-5.15/include/linux/uio.h>
 - Android 14 6.1 `iov_iter_ubuf` API：<https://android.googlesource.com/kernel/common/+/refs/heads/android14-6.1/include/linux/uio.h>
 - Android 通用 boot 与 init_boot 分区：<https://source.android.com/docs/core/architecture/partitions/generic-boot>
 - KernelSU `ksuinit` 入口：<https://github.com/tiann/KernelSU/blob/main/userspace/ksuinit/src/main.rs>

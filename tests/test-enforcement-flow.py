@@ -8,13 +8,14 @@ def run_selinux_setup(
     allow_permissive_selinux: bool,
     bootconfig_permissive: bool,
     initial_enforcing: bool,
+    selinux_intercept: bool = True,
 ) -> bool:
     desired_enforcing = not (
         allow_permissive_selinux and bootconfig_permissive
     )
     actual_enforcing = initial_enforcing
 
-    if dsu_active:
+    if dsu_active and selinux_intercept:
         # 代理通过原始 enforce fop 切换为 permissive，但仅向 PID 1 报告 1。
         actual_enforcing = False
         observed_enforcing = True
@@ -45,6 +46,14 @@ def main() -> None:
         allow_permissive_selinux=False,
         bootconfig_permissive=False,
         initial_enforcing=True,
+    ) is True
+
+    assert run_selinux_setup(
+        dsu_active=True,
+        allow_permissive_selinux=False,
+        bootconfig_permissive=False,
+        initial_enforcing=True,
+        selinux_intercept=False,
     ) is True
 
     # second-stage 注销代理后，手动 setenforce 1 必须直接生效。

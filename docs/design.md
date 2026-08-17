@@ -4,7 +4,34 @@
 
 目标是在 DSU 已经完成映射后完成两件事：先在 first-stage 的 AVB 复验窗口内，只向 PID 1 临时呈现带 `VERIFICATION_DISABLED` 标志的顶层 vbmeta；再在 SELinux enforcement 尚未由 init 最终确定的窗口内，优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不写磁盘 vbmeta，不伪造 verified boot 状态，不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
 
-模块只支持 arm64 GKI，以及 `android12-5.10`、`android13-5.15`、`android14-6.1`、`android15-6.6`、`android16-6.12` 五个 DDK target。对应的 AOSP Android 12 至 Android 16 init 均在加载 policy 后调用 `SelinuxSetEnforcement()`，并通过 fs_mgr 读取 cmdline/bootconfig；fs_mgr 对重复 bootconfig 键采用第一项。Android 11 及以下和非 GKI 内核不在支持范围内。
+模块只支持 arm64 GKI，以及 `android12-5.10`、`android13-5.10`、`android13-5.15`、`android14-5.15`、`android14-6.1`、`android15-6.6`、`android16-6.12` 七个 DDK target。对应的 AOSP Android 12 至 Android 16 init 均在加载 policy 后调用 `SelinuxSetEnforcement()`，并通过 fs_mgr 读取 cmdline/bootconfig；fs_mgr 对重复 bootconfig 键采用第一项。Android 11 及以下和非 GKI 内核不在支持范围内。
+
+## 统一配置链
+
+统一配置不写入 boot/init_boot ramdisk，而是保存在可独立修改的：
+
+```text
+/metadata/gsi/dsu_permissive.conf
+```
+
+内容固定为：
+
+```text
+selinux_intercept=0|1
+avb_intercept=0|1
+```
+
+`dsuinit` 位于 first-stage init 之前，此时 `/metadata` 尚未挂载，因此 loader 只负责提前加载 KO，不能安全地自行挂载或读取 metadata。模块仍会先注册原有的短生命周期 kprobe/tracepoint，以免错过约 `0.603s` 的顶层 vbmeta 窗口；file-operations wrapper 可能先被临时附加，但代理回调在任何注入或返回缓冲区修改之前，都必须确认 `/metadata/gsi/dsu/booted`，再通过普通进程上下文中的 `filp_open()` / `kernel_read()` 读取统一配置。Android 12/13/15 GKI 将这两个 VFS 符号放在 `ANDROID_GKI_VFS_EXPORT_ONLY` 命名空间，模块显式声明对应 `MODULE_IMPORT_NS`；Android 14/16 上多余的命名空间声明不改变行为。
+
+配置在一次启动中只读取并缓存一次：
+
+- 文件不存在：兼容历史行为，SELinux 与 AVB 拦截均开启；
+- 文件有效：两个开关独立生效；
+- 文件存在但无法读取、过长或语法无效：本次启动关闭两项拦截；
+- `selinux_intercept=0`：bootconfig 代理不注入，enforce 代理不执行切换；
+- `avb_intercept=0`：vbmeta 代理始终透传原始读取结果。
+
+这种布局允许在正常系统或 recovery 中修改 metadata 配置后直接重启 DSU 调试，而无需重复解包、修补和刷入 boot/init_boot。配置工具会用同目录临时文件加 `mv` 原子替换，并在可用时执行 `restorecon`。
 
 ## 状态机
 
@@ -35,6 +62,8 @@ DISABLED
 ```
 
 AVB 代理必须在 `WAIT_SYSTEM_INIT` 生效：目标设备日志中的顶层 vbmeta 处理发生在约 `0.603s`，而 PID 1 第一次 exec `/system/bin/init`、进入 `SELINUX_SETUP_ARMED` 是约 `0.628s`。阶段切换后，即使目标 file 尚未关闭，代理 read wrapper 也只透传原始内容。
+
+状态机与早期观察点始终存在到 second-stage 或超时，以保证 metadata 配置可以在挂载后决定行为。关闭某一路径时，对应 wrapper 可能仍完成一次原始读取，但不会注入或修改数据；共同的阶段门控继续负责及时注销所有观察点。
 
 在整个 `selinux_setup` 窗口内处理 PID 1 的每次 bootconfig 打开，而不是假设第一次读取一定来自 `StatusFromProperty()`。这样可容纳 init 或其库在 enforcement 决策前新增其他 bootconfig 查询。作用域仍限定为 PID 1、指定阶段和单个 `/proc/bootconfig` file。
 
@@ -159,6 +188,7 @@ fs_mgr 的 `GetBootconfigFromString()` 在首次找到目标 key 后不再覆盖
 ## 失败策略
 
 - KO 打开或加载失败：`dsuinit`记录错误并继续原 init 链。
+- metadata 统一配置读取失败、过长、缺键、重复、含未知键或非法值：模块缓存“两项均关闭”，本次启动不执行任何拦截。
 - KO 与设备 GKI/KMI target 不匹配：内核拒绝加载，`dsuinit`记录错误并继续原 init 链。
 - `/init.next` 执行失败：依次尝试 `/init.real` 与 `/system/bin/init`，所有失败均记录。
 - tracepoint 或 kprobe 注册失败：KO 加载失败并保留明确内核日志，系统启动仍由 loader 继续。

@@ -59,6 +59,19 @@ if ! grep -q 'vermagic=' <<<"$module_modinfo"; then
     echo "错误：内核模块缺少 vermagic" >&2
     exit 1
 fi
+if ! grep -q 'dsu_config_path=/metadata/gsi/dsu_permissive.conf' \
+    <<<"$module_modinfo"; then
+    echo "错误：内核模块缺少 metadata 统一配置声明" >&2
+    exit 1
+fi
+if ! grep -q 'dsu_ddk_target=' <<<"$module_modinfo"; then
+    echo "错误：内核模块缺少 DDK target 声明" >&2
+    exit 1
+fi
+if ! grep -q 'import_ns=ANDROID_GKI_VFS_EXPORT_ONLY' <<<"$module_modinfo"; then
+    echo "错误：内核模块缺少 Android GKI VFS 符号命名空间声明" >&2
+    exit 1
+fi
 if [[ -n "$target" ]]; then
     expected_kernel=${target#*-}
     if [[ "$expected_kernel" == "$target" ]]; then
@@ -68,6 +81,10 @@ if [[ -n "$target" ]]; then
     expected_kernel_regex=${expected_kernel//./\\.}
     if ! grep -Eq "vermagic=${expected_kernel_regex}([.-]|$)" <<<"$module_modinfo"; then
         echo "错误：模块 vermagic 与 DDK target $target 不匹配" >&2
+        exit 1
+    fi
+    if ! grep -Fq "dsu_ddk_target=$target" <<<"$module_modinfo"; then
+        echo "错误：模块内嵌 DDK target 与 $target 不匹配" >&2
         exit 1
     fi
 fi

@@ -19,6 +19,7 @@
 
 #include <asm/ptrace.h>
 
+#include "dsu_config.h"
 #include "dsu_detect.h"
 #include "dsu_permissive.h"
 #include "vbmeta_proxy.h"
@@ -177,6 +178,10 @@ static bool should_patch(struct vbmeta_slot *slot)
 	if (!slot->dsu_confirmed) {
 		if (!dsu_detect_active())
 			return false;
+		if (!dsu_config_avb_intercept()) {
+			slot->bypass_rejected = true;
+			return false;
+		}
 		if (dsu_detect_avb_enforced()) {
 			slot->bypass_rejected = true;
 			atomic64_inc(&proxy_errors);

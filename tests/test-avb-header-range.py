@@ -35,10 +35,12 @@ def proxy_read(
     dsu_active: bool = True,
     avb_enforced: bool = False,
     target_device: bool = True,
+    avb_intercept: bool = True,
 ) -> bytes:
     returned = bytearray(disk[read_offset : read_offset + read_size])
     if (
-        phase != "wait_system_init"
+        not avb_intercept
+        or phase != "wait_system_init"
         or pid != 1
         or not dsu_active
         or avb_enforced
@@ -108,6 +110,7 @@ def main() -> None:
         {"dsu_active": False},
         {"avb_enforced": True},
         {"target_device": False},
+        {"avb_intercept": False},
     ):
         assert proxy_read(disk, 0, len(disk), ProxyState(), **gate) == disk
 

@@ -14,6 +14,7 @@
 
 #include <asm/ptrace.h>
 
+#include "dsu_config.h"
 #include "dsu_detect.h"
 #include "dsu_permissive.h"
 #include "selinux_enforce_proxy.h"
@@ -86,7 +87,8 @@ static bool is_selinux_enforce(struct file *file)
 static bool dsu_is_active(struct selinux_enforce_slot *slot)
 {
 	if (!slot->dsu_checked) {
-		slot->dsu_active = dsu_detect_active();
+		slot->dsu_active = dsu_detect_active() &&
+				   dsu_config_selinux_intercept();
 		slot->dsu_checked = true;
 	}
 

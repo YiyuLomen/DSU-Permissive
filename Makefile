@@ -24,4 +24,10 @@ clean:
 			module/*.cmd module/Module.symvers module/modules.order; \
 	fi
 	$(MAKE) -C loader clean
-	rm -f "$(OUT_DIR)/dsu_permissive.ko" "$(OUT_DIR)/dsuinit"
+	rm -f "$(OUT_DIR)/dsu_permissive.ko" "$(OUT_DIR)/dsuinit" \
+		"$(OUT_DIR)/dsu_permissive.conf" \
+		"$(OUT_DIR)/patch-init-boot-android.sh" \
+		"$(OUT_DIR)/configure-metadata.sh" \
+		"$(OUT_DIR)/magiskboot-arm64" \
+		"$(OUT_DIR)/dsu-permissive-android-flasher.sh" \
+		"$(OUT_DIR)"/*/dsu-permissive-android-flasher.sh

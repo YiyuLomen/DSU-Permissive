@@ -17,6 +17,7 @@
 #include <asm/ptrace.h>
 
 #include "bootconfig_proxy.h"
+#include "dsu_config.h"
 #include "dsu_detect.h"
 #include "dsu_permissive.h"
 
@@ -90,7 +91,7 @@ static bool is_proc_bootconfig(struct file *file)
 static bool decide_injection(struct bootconfig_slot *slot)
 {
 	if (slot->decision == INJECTION_UNCHECKED) {
-		if (dsu_detect_active()) {
+		if (dsu_detect_active() && dsu_config_selinux_intercept()) {
 			slot->decision = INJECTION_ENABLED;
 			atomic64_inc(&injected_files);
 			if (atomic_cmpxchg(&injection_logged, 0, 1) == 0)

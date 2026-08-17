@@ -20,7 +20,7 @@ Android 12 出厂设备的通用 ramdisk 位于 `boot.img`；Android 13 及以�
 /init.real               原厂 init，保持不变
 /kernelsu.ko              KernelSU 模块，保持不变
 /dsu_permissive.ko        新模块
-/dsu_permissive.meta      可逆操作所需的格式和 SHA-256
+/dsu_permissive.meta      可逆操作所需的格式和三个 SHA-256
 ```
 
 `ksuinit` 的当前实现会在加载 KernelSU 后删除 `/init`，根据 `/init.real` 创建新的 `/init` 链接，再执行 `/init`。因此它虽然被移动到 `/init.next`，仍会正确转交 `/init.real`，不会重新执行 dsuinit。
@@ -33,4 +33,4 @@ patch 工具把输入镜像作为 repack 模板，所有操作在独立临时目
 - 已存在 `/init.next`、`/dsu_permissive.ko` 或元数据；
 - loader/KO 不是预期的 AArch64 ELF 产物。
 
-unpatch 工具根据元数据验证原 init、loader 和 KO 的 SHA-256，再恢复 `/init.next → /init`。由于 magiskboot 可能重新压缩 ramdisk，“可逆”指条目与内容逻辑还原，不承诺输出镜像与原输入逐字节一致。
+patch 工具记录原 init、loader 与 KO 的 SHA-256，unpatch 工具验证三项后恢复 `/init.next → /init`。统一配置独立位于 `/metadata/gsi/dsu_permissive.conf`，不属于镜像条目，也不会随 unpatch 删除。由于 magiskboot 可能重新压缩 ramdisk，“可逆”指条目与内容逻辑还原，不承诺输出镜像与原输入逐字节一致。
