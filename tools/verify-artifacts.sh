@@ -59,9 +59,14 @@ if ! grep -q 'vermagic=' <<<"$module_modinfo"; then
     echo "错误：内核模块缺少 vermagic" >&2
     exit 1
 fi
-if ! grep -q 'dsu_config_path=/metadata/gsi/dsu_permissive.conf' \
+if ! grep -q 'dsu_config_path=/dsu_permissive.conf' \
     <<<"$module_modinfo"; then
-    echo "错误：内核模块缺少 metadata 统一配置声明" >&2
+    echo "错误：内核模块缺少 init_boot 内嵌配置声明" >&2
+    exit 1
+fi
+if ! grep -q 'parm=selinux_intercept:' <<<"$module_modinfo" ||
+   ! grep -q 'parm=avb_intercept:' <<<"$module_modinfo"; then
+    echo "错误：内核模块缺少 SELinux/AVB 模块参数声明" >&2
     exit 1
 fi
 if ! grep -q 'dsu_ddk_target=' <<<"$module_modinfo"; then
@@ -91,7 +96,8 @@ fi
 
 module_undefined=$(llvm-nm -u "$module" | awk '{print $2}')
 for forbidden_symbol in \
-    filp_open kernel_write __kernel_write __kernel_write_iter \
+    filp_open dentry_open kernel_read filp_close \
+    kernel_write __kernel_write __kernel_write_iter \
     vfs_fsync vfs_fsync_range; do
     if grep -qx "$forbidden_symbol" <<<"$module_undefined"; then
         echo "错误：内核模块导入不允许的符号 $forbidden_symbol" >&2

@@ -33,6 +33,44 @@ original_init_sha256=$(sha256sum "$work_dir/root/init" | awk '{print $1}')
 original_real_sha256=$(sha256sum "$work_dir/root/init.real" | awk '{print $1}')
 original_ksu_sha256=$(sha256sum "$work_dir/root/kernelsu.ko" | awk '{print $1}')
 
+assert_embedded_config() {
+    local image=$1
+    local selinux_value=$2
+    local avb_value=$3
+    local check_dir
+
+    check_dir=$(mktemp -d "$work_dir/config-check.XXXXXX")
+    (
+        cd "$check_dir"
+        "$magiskboot_bin" unpack "$image" >/dev/null
+        "$magiskboot_bin" cpio ramdisk.cpio \
+            "extract dsu_permissive.conf config"
+        printf 'selinux_intercept=%s\navb_intercept=%s\n' \
+            "$selinux_value" "$avb_value" > expected
+        cmp -s config expected
+    )
+    rm -rf "$check_dir"
+}
+
+assert_metadata_hides_config() {
+    local image=$1
+    local check_dir
+
+    check_dir=$(mktemp -d "$work_dir/metadata-check.XXXXXX")
+    (
+        cd "$check_dir"
+        "$magiskboot_bin" unpack "$image" >/dev/null
+        "$magiskboot_bin" cpio ramdisk.cpio \
+            "extract dsu_permissive.meta metadata"
+        grep -qx 'format=3' metadata
+        if grep -q '^config_sha256=' metadata; then
+            echo "错误：metadata 泄漏内嵌配置哈希" >&2
+            exit 1
+        fi
+    )
+    rm -rf "$check_dir"
+}
+
 if "$root_dir/tools/patch-init-boot.sh" \
     --input "$work_dir/original.img" \
     --output "$work_dir/original.img" \
@@ -57,6 +95,8 @@ fi
     --magiskboot "$magiskboot_bin" >/dev/null
 "$root_dir/tools/verify-init-boot.sh" \
     --input "$work_dir/patched.img" --magiskboot "$magiskboot_bin" >/dev/null
+assert_embedded_config "$work_dir/patched.img" 1 1
+assert_metadata_hides_config "$work_dir/patched.img"
 if "$root_dir/tools/patch-init-boot.sh" \
     --input "$work_dir/patched.img" \
     --output "$work_dir/double-patched.img" \
@@ -72,10 +112,14 @@ sh "$root_dir/tools/patch-init-boot-android.sh" \
     --output "$work_dir/android-patched.img" \
     --loader "$root_dir/loader/dsuinit" \
     --module "$module_under_test" \
+    --selinux 0 \
+    --avb 1 \
     --magiskboot "$magiskboot_bin" >/dev/null
 "$root_dir/tools/verify-init-boot.sh" \
     --input "$work_dir/android-patched.img" \
     --magiskboot "$magiskboot_bin" >/dev/null
+assert_embedded_config "$work_dir/android-patched.img" 0 1
+assert_metadata_hides_config "$work_dir/android-patched.img"
 if sh "$root_dir/tools/patch-init-boot-android.sh" \
     --input "$work_dir/android-patched.img" \
     --output "$work_dir/android-double-patched.img" \
@@ -97,8 +141,20 @@ sh "$root_dir/tools/patch-init-boot-android.sh" \
 "$root_dir/tools/verify-init-boot.sh" \
     --input "$work_dir/android-updated.img" \
     --magiskboot "$magiskboot_bin" >/dev/null
-"$root_dir/tools/unpatch-init-boot.sh" \
+assert_embedded_config "$work_dir/android-updated.img" 1 1
+sh "$root_dir/tools/repatch-init-boot-config-android.sh" \
     --input "$work_dir/android-updated.img" \
+    --output "$work_dir/android-reconfigured.img" \
+    --selinux 1 \
+    --avb 0 \
+    --magiskboot "$magiskboot_bin" >/dev/null
+"$root_dir/tools/verify-init-boot.sh" \
+    --input "$work_dir/android-reconfigured.img" \
+    --magiskboot "$magiskboot_bin" >/dev/null
+assert_embedded_config "$work_dir/android-reconfigured.img" 1 0
+assert_metadata_hides_config "$work_dir/android-reconfigured.img"
+"$root_dir/tools/unpatch-init-boot.sh" \
+    --input "$work_dir/android-reconfigured.img" \
     --output "$work_dir/android-restored.img" \
     --magiskboot "$magiskboot_bin" >/dev/null
 
@@ -109,7 +165,7 @@ sh "$root_dir/tools/patch-init-boot-android.sh" \
 
 cd "$work_dir/check"
 "$magiskboot_bin" unpack "$work_dir/restored.img" >/dev/null
-for unexpected in init.next dsu_permissive.ko dsu_permissive.meta; do
+for unexpected in init.next dsu_permissive.ko dsu_permissive.conf dsu_permissive.meta; do
     if "$magiskboot_bin" cpio ramdisk.cpio "exists $unexpected" >/dev/null 2>&1; then
         echo "错误：往返还原后仍存在 /$unexpected" >&2
         exit 1
@@ -128,7 +184,7 @@ mkdir -p "$work_dir/android-restored-check"
 (
     cd "$work_dir/android-restored-check"
     "$magiskboot_bin" unpack "$work_dir/android-restored.img" >/dev/null
-    for unexpected in init.next dsu_permissive.ko dsu_permissive.meta; do
+    for unexpected in init.next dsu_permissive.ko dsu_permissive.conf dsu_permissive.meta; do
         if "$magiskboot_bin" cpio ramdisk.cpio "exists $unexpected" >/dev/null 2>&1; then
             echo "错误：Android 脚本产物还原后仍存在 /$unexpected" >&2
             exit 1

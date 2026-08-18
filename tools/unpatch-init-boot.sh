@@ -8,6 +8,10 @@ usage() {
 metadata_value() {
     local key=$1
     local file=$2
+    local count
+
+    count=$(grep -c "^${key}=" "$file" || true)
+    [[ "$count" == "1" ]] || return 1
     awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2) }' "$file"
 }
 
@@ -70,15 +74,17 @@ done
     "extract dsu_permissive.ko ../extract/current-module" \
     "extract dsu_permissive.meta ../extract/metadata"
 
-if [[ "$(metadata_value format "$work_dir/extract/metadata")" != "1" ||
-      "$(metadata_value project "$work_dir/extract/metadata")" != "DSU-Permissive" ]]; then
+format=$(metadata_value format "$work_dir/extract/metadata") || format=""
+project=$(metadata_value project "$work_dir/extract/metadata") || project=""
+if [[ ( "$format" != "1" && "$format" != "2" && "$format" != "3" ) ||
+      "$project" != "DSU-Permissive" ]]; then
     echo "错误：补丁元数据格式不受支持" >&2
     exit 1
 fi
 
-expected_original=$(metadata_value original_init_sha256 "$work_dir/extract/metadata")
-expected_loader=$(metadata_value loader_sha256 "$work_dir/extract/metadata")
-expected_module=$(metadata_value module_sha256 "$work_dir/extract/metadata")
+expected_original=$(metadata_value original_init_sha256 "$work_dir/extract/metadata") || expected_original=""
+expected_loader=$(metadata_value loader_sha256 "$work_dir/extract/metadata") || expected_loader=""
+expected_module=$(metadata_value module_sha256 "$work_dir/extract/metadata") || expected_module=""
 actual_original=$(sha256sum "$work_dir/extract/original-init" | awk '{print $1}')
 actual_loader=$(sha256sum "$work_dir/extract/current-loader" | awk '{print $1}')
 actual_module=$(sha256sum "$work_dir/extract/current-module" | awk '{print $1}')
@@ -88,11 +94,32 @@ if [[ -z "$expected_original" || "$actual_original" != "$expected_original" ||
     exit 1
 fi
 
+if [[ "$format" == "2" || "$format" == "3" ]]; then
+    if ! "$magiskboot_bin" cpio ramdisk.cpio \
+        "exists dsu_permissive.conf" >/dev/null 2>&1; then
+        echo "错误：format=$format 补丁缺少 /dsu_permissive.conf" >&2
+        exit 1
+    fi
+    "$magiskboot_bin" cpio ramdisk.cpio \
+        "extract dsu_permissive.conf ../extract/config"
+    if [[ "$format" == "2" ]]; then
+        expected_config=$(metadata_value config_sha256 "$work_dir/extract/metadata") || expected_config=""
+        actual_config=$(sha256sum "$work_dir/extract/config" | awk '{print $1}')
+        if [[ -z "$expected_config" || "$actual_config" != "$expected_config" ]]; then
+            echo "错误：内嵌配置已被修改，拒绝自动还原" >&2
+            exit 1
+        fi
+    fi
+fi
+
 "$magiskboot_bin" cpio ramdisk.cpio \
     "rm init" \
     "rm dsu_permissive.ko" \
     "rm dsu_permissive.meta" \
     "mv init.next init"
+if [[ "$format" == "2" || "$format" == "3" ]]; then
+    "$magiskboot_bin" cpio ramdisk.cpio "rm dsu_permissive.conf"
+fi
 "$magiskboot_bin" repack "$input" "$work_dir/candidate.img"
 
 cd "$work_dir/verify"
@@ -104,7 +131,7 @@ if ! "$magiskboot_bin" cpio ramdisk.cpio "exists init"; then
     echo "错误：还原候选镜像缺少 /init" >&2
     exit 1
 fi
-for entry in init.next dsu_permissive.ko dsu_permissive.meta; do
+for entry in init.next dsu_permissive.ko dsu_permissive.conf dsu_permissive.meta; do
     if "$magiskboot_bin" cpio ramdisk.cpio "exists $entry" >/dev/null 2>&1; then
         echo "错误：还原候选镜像仍含 /$entry" >&2
         exit 1

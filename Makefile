@@ -27,5 +27,5 @@ clean:
 	rm -f "$(OUT_DIR)/dsu_permissive.ko" "$(OUT_DIR)/dsuinit" \
 		"$(OUT_DIR)/dsu_permissive.conf" \
 		"$(OUT_DIR)/patch-init-boot-android.sh" \
-		"$(OUT_DIR)/configure-metadata.sh" \
+		"$(OUT_DIR)/repatch-init-boot-config-android.sh" \
 		"$(OUT_DIR)/magiskboot-arm64"

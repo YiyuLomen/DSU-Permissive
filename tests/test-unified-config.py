@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""固定 metadata 统一配置的严格解析与拦截行为组合契约。"""
+"""固定 init_boot 内嵌配置的严格解析与拦截行为组合契约。"""
 
 from dataclasses import dataclass
 
@@ -12,17 +12,17 @@ class InterceptPlan:
 
 
 def parse_config(text: str) -> tuple[bool, bool]:
-    values: dict[str, bool] = {}
-    for token in text.split():
-        key, separator, value = token.partition("=")
-        if not separator or key not in {"selinux_intercept", "avb_intercept"}:
-            raise ValueError("未知配置键")
-        if key in values or value not in {"0", "1"}:
-            raise ValueError("重复配置键或非法值")
-        values[key] = value == "1"
-    if values.keys() != {"selinux_intercept", "avb_intercept"}:
-        raise ValueError("缺少配置键")
-    return values["selinux_intercept"], values["avb_intercept"]
+    if text.endswith("\n"):
+        text = text[:-1]
+    prefix = "selinux_intercept="
+    separator = "\navb_intercept="
+    if not text.startswith(prefix):
+        raise ValueError("SELinux 配置必须位于首行")
+    remainder = text[len(prefix) :]
+    selinux, marker, avb = remainder.partition(separator)
+    if marker != separator or selinux not in {"0", "1"} or avb not in {"0", "1"}:
+        raise ValueError("配置格式或值无效")
+    return selinux == "1", avb == "1"
 
 
 def intercept_plan(selinux: bool, avb: bool) -> InterceptPlan:
@@ -31,15 +31,6 @@ def intercept_plan(selinux: bool, avb: bool) -> InterceptPlan:
         selinux_transition=selinux,
         vbmeta_patch=avb,
     )
-
-
-def effective_config(text: str | None) -> tuple[bool, bool]:
-    if text is None:
-        return True, True
-    try:
-        return parse_config(text)
-    except ValueError:
-        return False, False
 
 
 def main() -> None:
@@ -55,14 +46,14 @@ def main() -> None:
             assert plan.selinux_transition is selinux
             assert plan.vbmeta_patch is avb
 
-    assert parse_config("avb_intercept=0 selinux_intercept=1") == (True, False)
-    assert effective_config(None) == (True, True)
     for invalid in (
         "",
         "selinux_intercept=1",
         "selinux_intercept=1 avb_intercept=2",
         "selinux_intercept=1 avb_intercept=0 unknown=1",
         "selinux_intercept=1 selinux_intercept=0 avb_intercept=1",
+        "avb_intercept=0\nselinux_intercept=1",
+        "selinux_intercept=1\n\navb_intercept=0",
     ):
         try:
             parse_config(invalid)
@@ -70,9 +61,8 @@ def main() -> None:
             pass
         else:
             raise AssertionError(f"无效配置被接受：{invalid!r}")
-        assert effective_config(invalid) == (False, False)
 
-    print("metadata 统一配置与拦截矩阵测试通过")
+    print("init_boot 内嵌配置与拦截矩阵测试通过")
 
 
 if __name__ == "__main__":

@@ -10,11 +10,16 @@ for script in tools/*.sh tests/*.sh; do
     bash -n "$script"
 done
 sh -n tools/patch-init-boot-android.sh
+sh -n tools/repatch-init-boot-config-android.sh
+sh -n tools/android-flasher-template.sh
 if command -v shellcheck >/dev/null 2>&1; then
     shellcheck -x tools/fetch-static-magiskboot.sh \
+        tools/generate-android-flasher.sh \
+        tests/test-android-flasher-generator.sh \
         tests/test-image-roundtrip.sh tools/build.sh
-    shellcheck -s sh tools/patch-init-boot-android.sh \
-        tools/configure-metadata.sh
+    shellcheck -s sh tools/android-flasher-template.sh \
+        tools/patch-init-boot-android.sh \
+        tools/repatch-init-boot-config-android.sh
 fi
 expected_config=$'selinux_intercept=1\navb_intercept=1'
 actual_config=$(<config/dsu_permissive.conf)
@@ -37,7 +42,7 @@ python3 tests/test-avb-header-range.py
 python3 tests/test-bootconfig-parser.py
 python3 tests/test-enforcement-flow.py
 python3 tests/test-unified-config.py
-tests/test-metadata-config.sh
+tests/test-android-flasher-generator.sh
 make -C loader clean all
 
 if llvm-readelf -l loader/dsuinit | grep -q INTERP; then

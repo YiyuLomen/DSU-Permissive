@@ -8,10 +8,10 @@
 
 ## 统一配置链
 
-统一配置不写入 boot/init_boot ramdisk，而是保存在可独立修改的：
+统一配置由修补器写入 boot/init_boot ramdisk：
 
 ```text
-/metadata/gsi/dsu_permissive.conf
+/dsu_permissive.conf
 ```
 
 内容固定为：
@@ -21,17 +21,11 @@ selinux_intercept=0|1
 avb_intercept=0|1
 ```
 
-`dsuinit` 位于 first-stage init 之前，此时 `/metadata` 尚未挂载，因此 loader 只负责提前加载 KO，不能安全地自行挂载或读取 metadata。模块仍会先注册原有的短生命周期 kprobe/tracepoint，以免错过约 `0.603s` 的顶层 vbmeta 窗口；file-operations wrapper 可能先被临时附加，但代理回调在任何注入或返回缓冲区修改之前，都必须确认 `/metadata/gsi/dsu/booted`，再在普通进程上下文中通过 `kern_path()` 解析配置路径、用 `dentry_open()` 建立独立 file 引用，并以 `kernel_read()` 读取内容。`dentry_open()` 后立即对临时 path 执行 `path_put()`，文件最终由 `filp_close()` 释放。这里禁止使用 `filp_open()`：部分厂商 GKI 虽包含其内核实现，却没有将符号导出给外部模块，会导致 KO 在 first-stage 以 `Unknown symbol filp_open` 加载失败。Android 12/13/15 GKI 将读取链中的部分 VFS 符号放在 `ANDROID_GKI_VFS_EXPORT_ONLY` 命名空间，模块显式声明对应 `MODULE_IMPORT_NS`；Android 14/16 上多余的命名空间声明不改变行为。
+`dsuinit` 位于 first-stage init 之前，因而在加载 KO 前以普通用户空间 syscall 打开配置。配置严格限制为两行、固定键序和 `0|1` 值；读取前必须 unlink 成功，随后通过仍打开的 FD 读取，并在传给 `finit_module()` 后关闭。ramdisk 条目权限是 `0600`，模块参数权限为 `0000`，不创建 sysfs 可读节点。进入 `/init.next` 之前没有配置文件路径可供后续程序打开。离线 root/recovery 仍能读取 raw boot 镜像，这是镜像本身的信任边界。
 
-配置在一次启动中只读取并缓存一次：
+厂商 GKI 对外部 LKM 的符号策略不能只由 DDK 编译判断：已观察到 `filp_open` 未导出、`dentry_open` 位于仅供文件系统实现使用的内部命名空间、`kernel_read` 被标记为 protected symbol。为避免 KO 在 PID 1 first-stage 加载时直接失败，模块不导入 `filp_open`、`dentry_open`、`kernel_read` 或 `filp_close`，只从 `finit_module()` 接收两个布尔参数。`selinux_intercept=0` 禁用 bootconfig 注入与 enforce 切换；`avb_intercept=0` 让 vbmeta 代理始终透传原始读取结果。未指定修补器参数时两项均为 `1`。
 
-- 文件不存在：兼容历史行为，SELinux 与 AVB 拦截均开启；
-- 文件有效：两个开关独立生效；
-- 文件存在但无法读取、过长或语法无效：本次启动关闭两项拦截；
-- `selinux_intercept=0`：bootconfig 代理不注入，enforce 代理不执行切换；
-- `avb_intercept=0`：vbmeta 代理始终透传原始读取结果。
-
-这种布局允许在正常系统或 recovery 中修改 metadata 配置后直接重启 DSU 调试，而无需重复解包、修补和刷入 boot/init_boot。配置工具会用同目录临时文件加 `mv` 原子替换，并在可用时执行 `restorecon`。
+需要变更开关时重新修补镜像；Android 端 `repatch-init-boot-config-android.sh` 用 `--replace-existing --reuse-existing` 验证旧补丁，然后只替换内嵌配置并保留 loader、KO 和原 init。
 
 ## 状态机
 
@@ -63,7 +57,7 @@ DISABLED
 
 AVB 代理必须在 `WAIT_SYSTEM_INIT` 生效：目标设备日志中的顶层 vbmeta 处理发生在约 `0.603s`，而 PID 1 第一次 exec `/system/bin/init`、进入 `SELINUX_SETUP_ARMED` 是约 `0.628s`。阶段切换后，即使目标 file 尚未关闭，代理 read wrapper 也只透传原始内容。
 
-状态机与早期观察点始终存在到 second-stage 或超时，以保证 metadata 配置可以在挂载后决定行为。关闭某一路径时，对应 wrapper 可能仍完成一次原始读取，但不会注入或修改数据；共同的阶段门控继续负责及时注销所有观察点。
+状态机与早期观察点始终存在到 second-stage 或超时，以确保不会错过 first-stage 窗口。关闭某一路径时，对应 wrapper 可能仍完成一次原始读取，但不会注入或修改数据；共同的阶段门控继续负责及时注销所有观察点。
 
 在整个 `selinux_setup` 窗口内处理 PID 1 的每次 bootconfig 打开，而不是假设第一次读取一定来自 `StatusFromProperty()`。这样可容纳 init 或其库在 enforcement 决策前新增其他 bootconfig 查询。作用域仍限定为 PID 1、指定阶段和单个 `/proc/bootconfig` file。
 
@@ -188,7 +182,7 @@ fs_mgr 的 `GetBootconfigFromString()` 在首次找到目标 key 后不再覆盖
 ## 失败策略
 
 - KO 打开或加载失败：`dsuinit`记录错误并继续原 init 链。
-- metadata 统一配置读取失败、过长、缺键、重复、含未知键或非法值：模块缓存“两项均关闭”，本次启动不执行任何拦截。
+- 内嵌配置缺失、无法 unlink、读取失败或语法无效：loader 不传参数，模块使用默认 `1/1`，并记录错误；修补器与镜像验证器会拒绝生成或验证非严格格式的 format=3 镜像。
 - KO 与设备 GKI/KMI target 不匹配：内核拒绝加载，`dsuinit`记录错误并继续原 init 链。
 - `/init.next` 执行失败：依次尝试 `/init.real` 与 `/system/bin/init`，所有失败均记录。
 - tracepoint 或 kprobe 注册失败：KO 加载失败并保留明确内核日志，系统启动仍由 loader 继续。

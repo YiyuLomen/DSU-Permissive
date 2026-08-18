@@ -4,7 +4,7 @@
 
 #include <linux/types.h>
 
-#define DSU_CONFIG_PATH "/metadata/gsi/dsu_permissive.conf"
+#define DSU_CONFIG_PATH "/dsu_permissive.conf"
 
 bool dsu_config_selinux_intercept(void);
 bool dsu_config_avb_intercept(void);

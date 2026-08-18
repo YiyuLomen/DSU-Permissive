@@ -142,7 +142,7 @@ static int __init dsu_permissive_init(void)
 
 	schedule_delayed_work(&timeout_work,
 			      msecs_to_jiffies(HOOK_TIMEOUT_SECONDS * 1000U));
-	pr_info("dsu-permissive：模块已加载，等待从 metadata 解析统一配置\n");
+	pr_info("dsu-permissive：模块已加载，等待 first-stage DSU AVB 与 selinux_setup\n");
 	return 0;
 }
 
@@ -166,8 +166,8 @@ module_exit(dsu_permissive_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("DSU-Permissive contributors");
-MODULE_DESCRIPTION("按 metadata 统一配置在 Android DSU first-stage 临时处理 AVB 与 permissive");
-MODULE_INFO(dsu_config_path, "/metadata/gsi/dsu_permissive.conf");
+MODULE_DESCRIPTION("按 init_boot 内嵌参数在 Android DSU first-stage 临时处理 AVB 与 permissive");
+MODULE_INFO(dsu_config_path, "/dsu_permissive.conf");
 MODULE_INFO(dsu_ddk_target, DSU_DDK_TARGET);
 MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
-MODULE_VERSION("0.5.0");
+MODULE_VERSION("0.5.1");

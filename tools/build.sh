@@ -48,6 +48,7 @@ is_supported_target() {
 
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 targets=(android16-6.12)
+build_all=0
 
 case "${1:-}" in
     "") ;;
@@ -64,6 +65,7 @@ case "${1:-}" in
             exit 2
         fi
         targets=("${supported_targets[@]}")
+        build_all=1
         ;;
     --list-targets)
         if [[ $# -ne 1 ]]; then
@@ -108,10 +110,11 @@ done
 make -C loader clean all
 mkdir -p out
 cp -f loader/dsuinit out/dsuinit
-cp -f config/dsu_permissive.conf out/dsu_permissive.conf
 cp -f tools/patch-init-boot-android.sh out/patch-init-boot-android.sh
-cp -f tools/configure-metadata.sh out/configure-metadata.sh
-chmod 0755 out/patch-init-boot-android.sh out/configure-metadata.sh
+cp -f tools/repatch-init-boot-config-android.sh \
+    out/repatch-init-boot-config-android.sh
+chmod 0755 out/patch-init-boot-android.sh \
+    out/repatch-init-boot-config-android.sh
 
 magiskboot_path=$("$root_dir/tools/fetch-static-magiskboot.sh")
 cp -f "$magiskboot_path" out/magiskboot-arm64
@@ -124,12 +127,25 @@ for target in "${targets[@]}"; do
         --target "$target"
 done
 
+if [[ "$build_all" -eq 1 ]]; then
+    universal_flasher="$root_dir/out/dsu-permissive-android-flasher.sh"
+    rm -f -- "$universal_flasher"
+    "$root_dir/tools/generate-android-flasher.sh" \
+        --target auto \
+        --module-dir "$root_dir/out" \
+        --loader "$root_dir/out/dsuinit" \
+        --magiskboot "$root_dir/out/magiskboot-arm64" \
+        --output "$universal_flasher"
+fi
+
 echo "构建完成："
 echo "  loader：$root_dir/out/dsuinit"
-echo "  统一配置：$root_dir/out/dsu_permissive.conf"
 echo "  Android 修补脚本：$root_dir/out/patch-init-boot-android.sh"
-echo "  metadata 配置脚本：$root_dir/out/configure-metadata.sh"
+echo "  Android 重修补配置脚本：$root_dir/out/repatch-init-boot-config-android.sh"
 echo "  arm64 静态 magiskboot：$root_dir/out/magiskboot-arm64"
 for target in "${targets[@]}"; do
     echo "  $target：$root_dir/out/$target/dsu_permissive.ko"
 done
+if [[ "$build_all" -eq 1 ]]; then
+    echo "  全 KO 自动选择刷写脚本：$root_dir/out/dsu-permissive-android-flasher.sh"
+fi

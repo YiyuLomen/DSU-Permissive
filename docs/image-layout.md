@@ -20,6 +20,7 @@ Android 12 出厂设备的通用 ramdisk 位于 `boot.img`；Android 13 及以�
 /init.real               原厂 init，保持不变
 /kernelsu.ko              KernelSU 模块，保持不变
 /dsu_permissive.ko        新模块
+/dsu_permissive.conf      启动器读取后立即 unlink 的 0600 配置
 /dsu_permissive.meta      可逆操作所需的格式和三个 SHA-256
 ```
 
@@ -30,7 +31,7 @@ patch 工具把输入镜像作为 repack 模板，所有操作在独立临时目
 - 输入与输出为同一路径；
 - 输出已存在；
 - ramdisk 缺少 `/init`；
-- 已存在 `/init.next`、`/dsu_permissive.ko` 或元数据；
+- 已存在 `/init.next`、`/dsu_permissive.ko`、`/dsu_permissive.conf` 或元数据；
 - loader/KO 不是预期的 AArch64 ELF 产物。
 
-patch 工具记录原 init、loader 与 KO 的 SHA-256，unpatch 工具验证三项后恢复 `/init.next → /init`。统一配置独立位于 `/metadata/gsi/dsu_permissive.conf`，不属于镜像条目，也不会随 unpatch 删除。由于 magiskboot 可能重新压缩 ramdisk，“可逆”指条目与内容逻辑还原，不承诺输出镜像与原输入逐字节一致。
+patch 工具记录原 init、loader 与 KO 的 SHA-256，unpatch 工具验证三项后恢复 `/init.next → /init` 并删除全部四个 DSU-Permissive 条目。新 format=3 元数据不记录配置哈希，因为两个布尔值只有四种组合，持久哈希会泄漏配置。配置只在 first-stage 由 dsuinit 打开，unlink 成功后才会读取并加载模块；进入原 init 链时不再有可读取的配置路径。由于 magiskboot 可能重新压缩 ramdisk，“可逆”指条目与内容逻辑还原，不承诺输出镜像与原输入逐字节一致。

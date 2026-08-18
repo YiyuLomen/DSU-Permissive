@@ -5,14 +5,21 @@ typedef unsigned long size_t;
 #define O_RDONLY 0L
 #define O_WRONLY 1L
 #define O_CLOEXEC 02000000L
+#define O_NOFOLLOW 0400000L
 
 #define SYS_OPENAT 56L
 #define SYS_CLOSE 57L
+#define SYS_UNLINKAT 35L
+#define SYS_READ 63L
 #define SYS_WRITE 64L
 #define SYS_EXECVE 221L
 #define SYS_FINIT_MODULE 273L
 
 #define ERR_EEXIST (-17L)
+#define ERR_ENOENT (-2L)
+
+#define MODULE_CONFIG_CAPACITY 64U
+#define MODULE_PARAMS_CAPACITY 64U
 
 static int log_fd = 2;
 
@@ -96,6 +103,53 @@ static size_t append_number(char *buffer, size_t capacity, size_t cursor,
 	return cursor;
 }
 
+static int consume_text(const char *buffer, size_t length, size_t *cursor,
+			const char *expected)
+{
+	while (*expected) {
+		if (*cursor == length || buffer[*cursor] != *expected)
+			return 0;
+		++*cursor;
+		++expected;
+	}
+	return 1;
+}
+
+static int parse_module_config(const char *buffer, size_t length,
+			       char *parameters, size_t capacity)
+{
+	size_t cursor = 0;
+	size_t output = 0;
+	char selinux_value;
+	char avb_value;
+
+	if (!consume_text(buffer, length, &cursor, "selinux_intercept=") ||
+	    cursor == length)
+		return 0;
+	selinux_value = buffer[cursor++];
+	if ((selinux_value != '0' && selinux_value != '1') ||
+	    !consume_text(buffer, length, &cursor, "\navb_intercept=") ||
+	    cursor == length)
+		return 0;
+	avb_value = buffer[cursor++];
+	if ((avb_value != '0' && avb_value != '1') ||
+	    (cursor != length &&
+	     (cursor + 1 != length || buffer[cursor] != '\n')))
+		return 0;
+
+	output = append_text(parameters, capacity - 1, output,
+			     "selinux_intercept=");
+	if (output == capacity - 1)
+		return 0;
+	parameters[output++] = selinux_value;
+	output = append_text(parameters, capacity - 1, output, " avb_intercept=");
+	if (output == capacity - 1)
+		return 0;
+	parameters[output++] = avb_value;
+	parameters[output] = '\0';
+	return 1;
+}
+
 static void write_error(const char *operation, long error)
 {
 	char buffer[256];
@@ -119,10 +173,54 @@ static void setup_log(void)
 		log_fd = (int)result;
 }
 
+static void load_module_parameters(char *parameters, size_t capacity)
+{
+	char config[MODULE_CONFIG_CAPACITY];
+	long file;
+	long result;
+
+	parameters[0] = '\0';
+	file = raw_syscall4(SYS_OPENAT, AT_FDCWD,
+			    (long)"/dsu_permissive.conf",
+			    O_RDONLY | O_CLOEXEC | O_NOFOLLOW, 0);
+	if (file == ERR_ENOENT) {
+		write_log("<4>dsuinit：未找到内嵌配置，使用模块默认开关\n");
+		return;
+	}
+	if (file < 0) {
+		write_error("打开 /dsu_permissive.conf ", file);
+		return;
+	}
+	result = raw_syscall3(SYS_UNLINKAT, AT_FDCWD,
+			      (long)"/dsu_permissive.conf", 0);
+	if (result < 0) {
+		write_error("移除 /dsu_permissive.conf ", result);
+		write_log("<3>dsuinit：配置仍有路径，拒绝读取并使用模块默认开关\n");
+		raw_syscall1(SYS_CLOSE, file);
+		return;
+	}
+
+	result = raw_syscall3(SYS_READ, file, (long)config,
+			      MODULE_CONFIG_CAPACITY);
+	raw_syscall1(SYS_CLOSE, file);
+	if (result < 0) {
+		write_error("读取 /dsu_permissive.conf ", result);
+		return;
+	}
+	if ((size_t)result == MODULE_CONFIG_CAPACITY ||
+	    !parse_module_config(config, (size_t)result, parameters, capacity)) {
+		write_log("<3>dsuinit：内嵌配置无效，使用模块默认开关\n");
+		parameters[0] = '\0';
+		return;
+	}
+	write_log("<6>dsuinit：已加载并移除 init_boot 内嵌开关\n");
+}
+
 static void load_module(void)
 {
 	long file;
 	long result;
+	char parameters[MODULE_PARAMS_CAPACITY];
 
 	file = raw_syscall4(SYS_OPENAT, AT_FDCWD,
 			    (long)"/dsu_permissive.ko",
@@ -132,7 +230,8 @@ static void load_module(void)
 		return;
 	}
 
-	result = raw_syscall3(SYS_FINIT_MODULE, file, (long)"", 0);
+	load_module_parameters(parameters, sizeof(parameters));
+	result = raw_syscall3(SYS_FINIT_MODULE, file, (long)parameters, 0);
 	raw_syscall1(SYS_CLOSE, file);
 	if (result == 0) {
 		write_log("<6>dsuinit：dsu_permissive.ko 已加载\n");

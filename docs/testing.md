@@ -20,7 +20,7 @@ MODULE_UNDER_TEST=out/android15-6.6/dsu_permissive.ko \
 
 - AArch64 freestanding loader 构建；
 - loader 无 `PT_INTERP`、无动态依赖、无未解析符号；
-- metadata 统一配置两个键的四种组合、非法配置安全关闭，以及 Android 配置工具的写入/查看/删除；
+- `init_boot` 内嵌配置两个键的四种组合、严格两行格式、默认 `1/1`、模块参数传递，以及 Android 重修补配置往返；
 - AVB header `AVB0`、flags `[120,124)` 与目标字节 123 的偏移契约；
 - `0x80000001 → 0x80000003`、已含 `0x02` 时幂等，以及分片读取边界；
 - 非 PID 1、非 WAIT 阶段、非 DSU、非目标设备、`avb_enforce` 与错误魔数均不修改；
@@ -28,8 +28,9 @@ MODULE_UNDER_TEST=out/android15-6.6/dsu_permissive.ko \
 - AOSP bootconfig 首项优先契约；
 - SELinux setup 只覆盖 `androidboot.selinux`，verified boot 状态保持原值，second-stage 恢复完整原始视图；
 - `user` / `userdebug` init 的 enforce fallback 状态矩阵；
-- KO 不得导入部分厂商 GKI 未导出的 `filp_open`，也不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
-- 主机 Bash 与 Android `/system/bin/sh` 两套脚本生成相同 `format=1` 镜像元数据布局，Android 脚本还覆盖旧补丁哈希校验、逻辑还原和 loader/KO 替换往返；
+- KO 不得导入 `filp_open` / `dentry_open` / `kernel_read` / `filp_close` 文件读取链，也不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
+- 主机 Bash 与 Android `/system/bin/sh` 两套脚本生成相同 `format=3` 镜像元数据布局，Android 脚本还覆盖旧补丁哈希校验、逻辑还原、loader/KO 替换与仅配置重修补往返；
+- 单文件 Android 刷写生成器覆盖自动 KMI bundle 的资源哈希、自校验和 target 选择；不要求构建单一 KMI 绑定的刷写产物；
 - 可代表 Android 12 `boot.img` 或 Android 13 及以上 `init_boot.img` 的最小 boot header v4 镜像往返；
 - KernelSU 的 `/init.real` 与 `/kernelsu.ko` 在往返后哈希不变。
 
@@ -58,7 +59,7 @@ tools/build.sh --all
 | `android13-5.10` | Android 13 |
 | `android12-5.10` | Android 12 |
 
-KO 输出到 `out/<DDK target>/dsu_permissive.ko`。`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo、metadata 配置路径、内嵌 DDK target、Android GKI VFS 命名空间声明、vermagic、产物是否与指定 target 一致，并拒绝导入 `filp_open` 等不允许符号的 KO。
+KO 输出到 `out/<DDK target>/dsu_permissive.ko`。仅 `tools/build.sh --all` 额外生成 `out/dsu-permissive-android-flasher.sh` 自动 KMI bundle，不生成 `out/<target>/dsu-permissive-android-flasher.sh`。`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo、内嵌配置路径与模块参数声明、内嵌 DDK target、Android GKI VFS 命名空间声明、vermagic、产物是否与指定 target 一致，并拒绝导入内核文件读取链等不允许符号的 KO。
 
 AVB Python 测试固定的是主机端行为契约，不会执行内核中的 C 回调。实际 fops、kprobe、KMI 和用户缓冲区路径仍必须由 DDK 构建与真机日志验证。
 
@@ -68,7 +69,7 @@ AVB Python 测试固定的是主机端行为契约，不会执行内核中的 C 
 tools/fetch-static-magiskboot.sh --force
 ```
 
-该命令需要网络，会校验固定的官方 Magisk v30.7 APK SHA-256、内部 arm64 magiskboot SHA-256、ELF 架构以及不存在动态解释器/动态依赖，因此不放入默认离线回归。
+该命令需要网络，会校验固定的官方 Magisk v30.7 APK SHA-256、内部 arm64 magiskboot SHA-256、ELF 架构以及不存在动态解释器/动态依赖，因此不放入默认离线回归。`tests/test-android-flasher-generator.sh` 还覆盖自动 KMI bundle 的资源校验，并确认生成器拒绝单一 KMI target；构建流程只发布自动 KMI bundle。
 
 ## 真机前检查
 
@@ -80,7 +81,7 @@ tools/fetch-static-magiskboot.sh --force
 4. 若启用 AVB 拦截，bootloader 已报告 `verifiedbootstate=orange`，并且未创建 `/metadata/gsi/dsu/avb_enforce`；
 5. 外部启动链已经允许当前 `boot` 或 `init_boot` 镜像启动。
 
-还应在启动前运行 `tools/configure-metadata.sh --show`，确认 `/metadata/gsi/dsu_permissive.conf` 与预期一致。若只测试其中一条路径，应分别使用 `selinux_intercept=0` 或 `avb_intercept=0`，重启 DSU 后确认被关闭路径的注入/修改计数始终为 0。
+还应在刷写前用 `tools/verify-init-boot.sh --input <镜像>` 确认内嵌开关。若只测试其中一条路径，请用修补器或重修补脚本写入 `--selinux 0` 或 `--avb 0`，再刷入该镜像；被关闭路径的注入/修改计数应始终为 0。
 
 ## 预期真机结果
 
@@ -98,7 +99,8 @@ DSU：
 
 ```text
 dsu-permissive：已定位 first-stage vbmeta 块设备
-dsu-permissive：metadata 统一配置已加载，SELinux 拦截=开启，AVB 拦截=开启
+dsuinit：已加载并移除 init_boot 内嵌开关
+dsuinit：dsu_permissive.ko 已加载
 dsu-permissive：已为 PID 1 临时呈现 verification-disabled vbmeta
 init: [libfs_avb] Failed to verify vbmeta digest
 init: [libfs_avb] Returning avb_handle with status: VerificationDisabled
