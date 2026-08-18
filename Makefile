@@ -28,6 +28,4 @@ clean:
 		"$(OUT_DIR)/dsu_permissive.conf" \
 		"$(OUT_DIR)/patch-init-boot-android.sh" \
 		"$(OUT_DIR)/configure-metadata.sh" \
-		"$(OUT_DIR)/magiskboot-arm64" \
-		"$(OUT_DIR)/dsu-permissive-android-flasher.sh" \
-		"$(OUT_DIR)"/*/dsu-permissive-android-flasher.sh
+		"$(OUT_DIR)/magiskboot-arm64"

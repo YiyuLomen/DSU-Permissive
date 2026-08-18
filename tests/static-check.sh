@@ -2,20 +2,19 @@
 set -euo pipefail
 
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/dsu-static-check.XXXXXX")
+trap 'rm -rf -- "$work_dir"' EXIT
 cd "$root_dir"
 
 for script in tools/*.sh tests/*.sh; do
     bash -n "$script"
 done
 sh -n tools/patch-init-boot-android.sh
-sh -n tools/android-flasher-template.sh
 if command -v shellcheck >/dev/null 2>&1; then
     shellcheck -x tools/fetch-static-magiskboot.sh \
-        tools/generate-android-flasher.sh \
-        tests/test-android-flasher-generator.sh \
         tests/test-image-roundtrip.sh tools/build.sh
-    shellcheck -s sh tools/android-flasher-template.sh \
-        tools/patch-init-boot-android.sh tools/configure-metadata.sh
+    shellcheck -s sh tools/patch-init-boot-android.sh \
+        tools/configure-metadata.sh
 fi
 expected_config=$'selinux_intercept=1\navb_intercept=1'
 actual_config=$(<config/dsu_permissive.conf)
@@ -39,7 +38,6 @@ python3 tests/test-bootconfig-parser.py
 python3 tests/test-enforcement-flow.py
 python3 tests/test-unified-config.py
 tests/test-metadata-config.sh
-tests/test-android-flasher-generator.sh
 make -C loader clean all
 
 if llvm-readelf -l loader/dsuinit | grep -q INTERP; then
@@ -48,6 +46,23 @@ if llvm-readelf -l loader/dsuinit | grep -q INTERP; then
 fi
 if [[ -n "$(llvm-nm -u loader/dsuinit 2>/dev/null)" ]]; then
     echo "错误：dsuinit 含未解析符号" >&2
+    exit 1
+fi
+
+clang --target=aarch64-linux-gnu -c tests/fake_module.S \
+    -o "$work_dir/valid-module.ko"
+tools/verify-artifacts.sh \
+    --loader loader/dsuinit \
+    --module "$work_dir/valid-module.ko" \
+    --target android16-6.12 >/dev/null
+clang --target=aarch64-linux-gnu \
+    -DTEST_UNDEFINED_SYMBOL=filp_open \
+    -c tests/fake_module.S -o "$work_dir/filp-open-module.ko"
+if tools/verify-artifacts.sh \
+    --loader loader/dsuinit \
+    --module "$work_dir/filp-open-module.ko" \
+    --target android16-6.12 >/dev/null 2>&1; then
+    echo "错误：产物验证器接受了导入 filp_open 的模块" >&2
     exit 1
 fi
 

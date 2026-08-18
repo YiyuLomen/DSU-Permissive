@@ -28,9 +28,8 @@ MODULE_UNDER_TEST=out/android15-6.6/dsu_permissive.ko \
 - AOSP bootconfig 首项优先契约；
 - SELinux setup 只覆盖 `androidboot.selinux`，verified boot 状态保持原值，second-stage 恢复完整原始视图；
 - `user` / `userdebug` init 的 enforce fallback 状态矩阵；
-- KO 不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
+- KO 不得导入部分厂商 GKI 未导出的 `filp_open`，也不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
 - 主机 Bash 与 Android `/system/bin/sh` 两套脚本生成相同 `format=1` 镜像元数据布局，Android 脚本还覆盖旧补丁哈希校验、逻辑还原和 loader/KO 替换往返；
-- 单文件 Android 刷写生成器拒绝 target/vermagic 或内嵌 DDK target 不匹配，同时覆盖单 target 与七 KO `auto` bundle；通用包可完整解包并逐项验证 magiskboot、loader、七个 KO、patcher 与 configurator 的 SHA-256，并验证七种 `uname -r` 映射与 5.10/5.15 歧义拒绝；
 - 可代表 Android 12 `boot.img` 或 Android 13 及以上 `init_boot.img` 的最小 boot header v4 镜像往返；
 - KernelSU 的 `/init.real` 与 `/kernelsu.ko` 在往返后哈希不变。
 
@@ -59,7 +58,7 @@ tools/build.sh --all
 | `android13-5.10` | Android 13 |
 | `android12-5.10` | Android 12 |
 
-KO 输出到 `out/<DDK target>/dsu_permissive.ko`。`tools/build.sh --all` 还会生成 `out/dsu-permissive-android-flasher.sh`，把七个 KO 放在同一 bundle 中供设备端按 `uname -r` 的 Android KMI 世代与内核分支共同选择。`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo、metadata 配置路径、内嵌 DDK target、Android GKI VFS 命名空间声明、vermagic，以及产物是否与指定 target 一致。
+KO 输出到 `out/<DDK target>/dsu_permissive.ko`。`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo、metadata 配置路径、内嵌 DDK target、Android GKI VFS 命名空间声明、vermagic、产物是否与指定 target 一致，并拒绝导入 `filp_open` 等不允许符号的 KO。
 
 AVB Python 测试固定的是主机端行为契约，不会执行内核中的 C 回调。实际 fops、kprobe、KMI 和用户缓冲区路径仍必须由 DDK 构建与真机日志验证。
 
@@ -69,7 +68,7 @@ AVB Python 测试固定的是主机端行为契约，不会执行内核中的 C 
 tools/fetch-static-magiskboot.sh --force
 ```
 
-该命令需要网络，会校验固定的官方 Magisk v30.7 APK SHA-256、内部 arm64 magiskboot SHA-256、ELF 架构以及不存在动态解释器/动态依赖，因此不放入默认离线回归。`tests/static-check.sh` 使用 AArch64 静态测试产物覆盖单文件封装、资源哈希、自校验和 target 拒绝逻辑。
+该命令需要网络，会校验固定的官方 Magisk v30.7 APK SHA-256、内部 arm64 magiskboot SHA-256、ELF 架构以及不存在动态解释器/动态依赖，因此不放入默认离线回归。
 
 ## 真机前检查
 
@@ -80,7 +79,6 @@ tools/fetch-static-magiskboot.sh --force
 3. 已保留可恢复的原镜像和可用的 bootloader/recovery 路径；
 4. 若启用 AVB 拦截，bootloader 已报告 `verifiedbootstate=orange`，并且未创建 `/metadata/gsi/dsu/avb_enforce`；
 5. 外部启动链已经允许当前 `boot` 或 `init_boot` 镜像启动。
-6. 自动刷写脚本打印的块设备、槽位、分区大小与备份路径均符合当前设备；在确认备份可从 bootloader/recovery 恢复之前，不传入 `--flash`。
 
 还应在启动前运行 `tools/configure-metadata.sh --show`，确认 `/metadata/gsi/dsu_permissive.conf` 与预期一致。若只测试其中一条路径，应分别使用 `selinux_intercept=0` 或 `avb_intercept=0`，重启 DSU 后确认被关闭路径的注入/修改计数始终为 0。
 

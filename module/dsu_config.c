@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <linux/err.h>
 #include <linux/errno.h>
+#include <linux/cred.h>
 #include <linux/fs.h>
 #include <linux/mutex.h>
+#include <linux/namei.h>
+#include <linux/path.h>
 #include <linux/printk.h>
 #include <linux/types.h>
 
@@ -88,14 +91,21 @@ static int parse_config(const char *buffer, size_t length,
 static int read_config(char *buffer, size_t *length)
 {
 	struct file *file;
+	struct path path;
 	loff_t position = 0;
 	size_t used = 0;
 	ssize_t result;
-	int error = 0;
+	int error;
 
-	file = filp_open(DSU_CONFIG_PATH, O_RDONLY, 0);
+	error = kern_path(DSU_CONFIG_PATH, LOOKUP_FOLLOW, &path);
+	if (error)
+		return error;
+
+	file = dentry_open(&path, O_RDONLY, current_cred());
+	path_put(&path);
 	if (IS_ERR(file))
 		return PTR_ERR(file);
+	error = 0;
 
 	while (used < CONFIG_CAPACITY) {
 		result = kernel_read(file, buffer + used, CONFIG_CAPACITY - used,

@@ -113,9 +113,7 @@ out/dsu_permissive.conf
 out/patch-init-boot-android.sh
 out/configure-metadata.sh
 out/magiskboot-arm64
-out/dsu-permissive-android-flasher.sh
 out/android16-6.12/dsu_permissive.ko
-out/android16-6.12/dsu-permissive-android-flasher.sh
 out/android15-6.6/dsu_permissive.ko
 out/android14-6.1/dsu_permissive.ko
 out/android14-5.15/dsu_permissive.ko
@@ -157,49 +155,7 @@ MAGISKBOOT=/path/to/magiskboot sh ./patch-init-boot-android.sh \
 
 脚本会在设备本地完成解包、条目冲突检查、SHA-256 元数据生成、重打包和再次解包校验；不会刷写分区，也不会覆盖输入或已有输出。SELinux/AVB 开关由独立的 `configure-metadata.sh` 管理，不固化进镜像。Android 端脚本不具备主机 LLVM 工具链，建议复制到设备前先运行 `tools/verify-artifacts.sh` 检查 loader/KO。
 
-### 生成单文件自动刷写脚本
-
-[`tools/fetch-static-magiskboot.sh`](tools/fetch-static-magiskboot.sh) 会从官方 Magisk v30.7 APK 提取 `lib/arm64-v8a/libmagiskboot.so`，固定校验 APK 与二进制 SHA-256，并确认它是 AArch64 `ET_EXEC`、不含 `PT_INTERP`、动态段或 `DT_NEEDED`。缓存位于 `.cache/magiskboot/v30.7/`，构建输出另存为 `out/magiskboot-arm64`。
-
-[`tools/generate-android-flasher.sh`](tools/generate-android-flasher.sh) 会把静态 magiskboot、静态 dsuinit、KO、Android 修补脚本和 metadata 配置工具全部 Base64 封装为一个可离线复制的 Android shell 脚本。推荐使用 `auto`，把七个 target 的 KO 全部打包到同一个文件：
-
-```bash
-tools/generate-android-flasher.sh \
-  --target auto \
-  --module-dir out \
-  --output out/dsu-permissive-android-flasher.sh
-```
-
-设备端在读取或写入分区之前调用 `uname -r`，同时匹配其中的 Android KMI 世代和内核分支：`android12 + 5.10 → android12-5.10`、`android13 + 5.10 → android13-5.10`、`android13 + 5.15 → android13-5.15`、`android14 + 5.15 → android14-5.15`、`android14 + 6.1 → android14-6.1`、`android15 + 6.6 → android15-6.6`、`android16 + 6.12 → android16-6.12`。脚本只解包并校验被选中的 KO；缺少 Android 世代标识、组合不受支持或 bundle 缺少对应 KO 时，在接触分区前直接终止。该选择不会替代内核加载阶段对符号 CRC、vermagic 与模块签名策略的最终校验。
-
-`tools/build.sh --target ...` 仍会生成单 target 脚本；`tools/build.sh --all` 会额外生成包含全部七个 KO 的 `out/dsu-permissive-android-flasher.sh`。脚本不需要设备端另外安装 magiskboot，也不会在设备端联网；仍以 Android 自带 `/system/bin/sh` 和 toybox 基础命令作为运行环境。
-
-复制到设备后，默认运行只自动识别当前槽位和 `init_boot/boot`、完整提取分区、保存持久备份并生成已验证的补丁镜像，不写块设备：
-
-```sh
-adb push out/dsu-permissive-android-flasher.sh /data/local/tmp/
-adb shell su -c 'sh /data/local/tmp/dsu-permissive-android-flasher.sh'
-```
-
-确认恢复路径后，显式加入 `--flash` 才会写入。脚本会在写入后回读相同长度并比较 SHA-256：
-
-```sh
-adb shell su -c 'sh /data/local/tmp/dsu-permissive-android-flasher.sh --flash --selinux 1 --avb 1'
-```
-
-自动流程包括：
-
-- 根据 `ro.boot.slot_suffix` / `ro.boot.slot` 选择当前槽位；
-- 优先选择 `init_boot[_a|_b]`，不存在时回退到 `boot[_a|_b]`；
-- 在接触分区前从完整 `uname -r` 识别 Android KMI 世代与内核分支，从七个内置 KO 中选择对应 DDK target；
-- 完整备份整个目标分区并核对块设备大小；
-- 使用内置静态 magiskboot 修补并重新解包校验；
-- 若检测到完整旧版 DSU-Permissive 补丁，先校验旧 loader、KO 与原 init 三项哈希，再恢复原 init 链并安全替换；条目不完整或哈希不一致时拒绝继续；
-- 拒绝在已知 bootloader locked 状态或 DSU 内直接刷写，除非显式覆盖；
-- 写入 metadata 配置、刷入、同步并回读校验；
-- 保留原始完整镜像和补丁镜像，并打印可直接使用的恢复命令。
-
-可用 `--partition` 指定块设备、`--slot a|b|none` 覆盖自动槽位、`--backup-dir` 改变备份位置，或先执行 `--verify-bundle` 只校验内置资源。详细参数通过 `--help` 查看。
+[`tools/fetch-static-magiskboot.sh`](tools/fetch-static-magiskboot.sh) 会从官方 Magisk v30.7 APK 提取并验证 arm64 静态 magiskboot。`tools/build.sh` 将其输出到 `out/magiskboot-arm64`，可与 Android 修补脚本及其他产物分别复制到设备。
 
 验证镜像：
 
@@ -222,14 +178,13 @@ tools/unpatch-init-boot.sh \
 
 - 只支持表中列出的 arm64 GKI/DDK target；不支持 5.4、4.x、非 GKI 内核或 Android 11 及以下版本。
 - 每个 GKI target 必须使用各自构建的 KO；即使内核主次版本相同，也不能在不同 Android KMI 世代之间复用模块。
-- `auto` 刷写脚本内置全部七个 KO，并按 `uname -r` 中的 Android KMI 世代与内核分支共同选择；单 target 脚本仍只接受完全对应的 target。
 - 设备内核必须启用模块与 kprobe，并允许加载对应签名策略下的 KO；启用 SELinux 拦截时还要求 `CONFIG_SECURITY_SELINUX_DEVELOP`。
 - AVB 拦截开启时，后期旁路只适用于 bootloader 已报告 `verifiedbootstate=orange` 的解锁设备；若存在 `/metadata/gsi/dsu/avb_enforce`，模块会拒绝修改读取视图。
 - 模块不会绕过 bootloader 对 `boot`、`init_boot` 或磁盘 vbmeta 的校验，也不会写入、签名或持久修改 vbmeta。修改只存在于 DSU first-stage PID 1 的单次读取返回缓冲区中。
 - 顶层 `VERIFICATION_DISABLED` 会让本次 DSU 启动中由同一个 AVB handle 管理的 system、vendor、odm 等分区跳过 Hashtree，而不只影响 DSU system；正常启动仍读取磁盘原始 vbmeta。
 - 启动期 enforce fallback 只执行一次；second-stage 后模块不会阻止手动或系统主动切回 Enforcing。
-- 产物检查会拒绝导入该设备 GKI 签名保护不允许的 `kernel_write` / `vfs_fsync` 系列符号。
+- 产物检查会拒绝导入部分厂商 GKI 未导出的 `filp_open`，以及该设备 GKI 签名保护不允许的 `kernel_write` / `vfs_fsync` 系列符号。
 - DDK 的通用 KMI 构建成功不等同于所有同版本厂商 GKI 都可运行，真机前必须核对 vermagic、符号与模块签名要求。
-- 主机端 patch/verify/unpatch 工具不刷写分区；生成的 Android flasher 只有在显式传入 `--flash` 时才执行块设备写入。
+- 主机端 patch/verify/unpatch 工具与 Android 修补脚本均不刷写分区。
 
 完整设计见 [docs/design.md](docs/design.md)，镜像布局见 [docs/image-layout.md](docs/image-layout.md)，验证说明见 [docs/testing.md](docs/testing.md)。

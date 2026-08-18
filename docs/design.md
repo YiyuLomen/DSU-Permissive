@@ -21,7 +21,7 @@ selinux_intercept=0|1
 avb_intercept=0|1
 ```
 
-`dsuinit` 位于 first-stage init 之前，此时 `/metadata` 尚未挂载，因此 loader 只负责提前加载 KO，不能安全地自行挂载或读取 metadata。模块仍会先注册原有的短生命周期 kprobe/tracepoint，以免错过约 `0.603s` 的顶层 vbmeta 窗口；file-operations wrapper 可能先被临时附加，但代理回调在任何注入或返回缓冲区修改之前，都必须确认 `/metadata/gsi/dsu/booted`，再通过普通进程上下文中的 `filp_open()` / `kernel_read()` 读取统一配置。Android 12/13/15 GKI 将这两个 VFS 符号放在 `ANDROID_GKI_VFS_EXPORT_ONLY` 命名空间，模块显式声明对应 `MODULE_IMPORT_NS`；Android 14/16 上多余的命名空间声明不改变行为。
+`dsuinit` 位于 first-stage init 之前，此时 `/metadata` 尚未挂载，因此 loader 只负责提前加载 KO，不能安全地自行挂载或读取 metadata。模块仍会先注册原有的短生命周期 kprobe/tracepoint，以免错过约 `0.603s` 的顶层 vbmeta 窗口；file-operations wrapper 可能先被临时附加，但代理回调在任何注入或返回缓冲区修改之前，都必须确认 `/metadata/gsi/dsu/booted`，再在普通进程上下文中通过 `kern_path()` 解析配置路径、用 `dentry_open()` 建立独立 file 引用，并以 `kernel_read()` 读取内容。`dentry_open()` 后立即对临时 path 执行 `path_put()`，文件最终由 `filp_close()` 释放。这里禁止使用 `filp_open()`：部分厂商 GKI 虽包含其内核实现，却没有将符号导出给外部模块，会导致 KO 在 first-stage 以 `Unknown symbol filp_open` 加载失败。Android 12/13/15 GKI 将读取链中的部分 VFS 符号放在 `ANDROID_GKI_VFS_EXPORT_ONLY` 命名空间，模块显式声明对应 `MODULE_IMPORT_NS`；Android 14/16 上多余的命名空间声明不改变行为。
 
 配置在一次启动中只读取并缓存一次：
 

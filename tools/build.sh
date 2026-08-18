@@ -48,7 +48,6 @@ is_supported_target() {
 
 root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 targets=(android16-6.12)
-build_all=0
 
 case "${1:-}" in
     "") ;;
@@ -65,7 +64,6 @@ case "${1:-}" in
             exit 2
         fi
         targets=("${supported_targets[@]}")
-        build_all=1
         ;;
     --list-targets)
         if [[ $# -ne 1 ]]; then
@@ -124,26 +122,7 @@ for target in "${targets[@]}"; do
         --loader "$root_dir/out/dsuinit" \
         --module "$root_dir/out/$target/dsu_permissive.ko" \
         --target "$target"
-    flasher_output="$root_dir/out/$target/dsu-permissive-android-flasher.sh"
-    rm -f -- "$flasher_output"
-    "$root_dir/tools/generate-android-flasher.sh" \
-        --target "$target" \
-        --loader "$root_dir/out/dsuinit" \
-        --module "$root_dir/out/$target/dsu_permissive.ko" \
-        --magiskboot "$root_dir/out/magiskboot-arm64" \
-        --output "$flasher_output"
 done
-
-if [[ "$build_all" -eq 1 ]]; then
-    universal_flasher="$root_dir/out/dsu-permissive-android-flasher.sh"
-    rm -f -- "$universal_flasher"
-    "$root_dir/tools/generate-android-flasher.sh" \
-        --target auto \
-        --module-dir "$root_dir/out" \
-        --loader "$root_dir/out/dsuinit" \
-        --magiskboot "$root_dir/out/magiskboot-arm64" \
-        --output "$universal_flasher"
-fi
 
 echo "构建完成："
 echo "  loader：$root_dir/out/dsuinit"
@@ -153,8 +132,4 @@ echo "  metadata 配置脚本：$root_dir/out/configure-metadata.sh"
 echo "  arm64 静态 magiskboot：$root_dir/out/magiskboot-arm64"
 for target in "${targets[@]}"; do
     echo "  $target：$root_dir/out/$target/dsu_permissive.ko"
-    echo "  $target 单文件刷写脚本：$root_dir/out/$target/dsu-permissive-android-flasher.sh"
 done
-if [[ "$build_all" -eq 1 ]]; then
-    echo "  全 KO 自动选择刷写脚本：$root_dir/out/dsu-permissive-android-flasher.sh"
-fi

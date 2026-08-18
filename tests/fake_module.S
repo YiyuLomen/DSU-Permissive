@@ -12,4 +12,10 @@
 	.ascii "dsu_ddk_target="
 	.asciz TEST_DDK_TARGET
 	.asciz "import_ns=ANDROID_GKI_VFS_EXPORT_ONLY"
+#ifdef TEST_UNDEFINED_SYMBOL
+	.section .text, "ax", %progbits
+	.global test_undefined_symbol
+test_undefined_symbol:
+	b TEST_UNDEFINED_SYMBOL
+#endif
 	.section .note.GNU-stack, "", %progbits

@@ -90,11 +90,11 @@ if [[ -n "$target" ]]; then
 fi
 
 module_undefined=$(llvm-nm -u "$module" | awk '{print $2}')
-for protected_symbol in \
-    kernel_write __kernel_write __kernel_write_iter \
+for forbidden_symbol in \
+    filp_open kernel_write __kernel_write __kernel_write_iter \
     vfs_fsync vfs_fsync_range; do
-    if grep -qx "$protected_symbol" <<<"$module_undefined"; then
-        echo "错误：内核模块导入设备受保护符号 $protected_symbol" >&2
+    if grep -qx "$forbidden_symbol" <<<"$module_undefined"; then
+        echo "错误：内核模块导入不允许的符号 $forbidden_symbol" >&2
         exit 1
     fi
 done
