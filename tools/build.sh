@@ -100,11 +100,14 @@ ddk_bin="${DDK:-ddk}"
 ddk_bin=$(command -v -- "$ddk_bin")
 
 cd "$root_dir"
+mkdir -p out/.build
 for target in "${targets[@]}"; do
     echo "开始构建 $target（$(android_version_for_target "$target")）"
     "$ddk_bin" clean "$target"
-    "$ddk_bin" build "$target" -- module "OUT_DIR=out/$target" \
+    "$ddk_bin" build "$target" -- module "OUT_DIR=out/.build/$target" \
         "DSU_DDK_TARGET=$target" -j"$(nproc)"
+    install -m 0644 -- "out/.build/$target/dsu_permissive.ko" \
+        "out/dsu_permissive-$target.ko"
 done
 
 make -C loader clean all
@@ -123,7 +126,7 @@ chmod 0755 out/magiskboot-arm64
 for target in "${targets[@]}"; do
     "$root_dir/tools/verify-artifacts.sh" \
         --loader "$root_dir/out/dsuinit" \
-        --module "$root_dir/out/$target/dsu_permissive.ko" \
+        --module "$root_dir/out/dsu_permissive-$target.ko" \
         --target "$target"
 done
 
@@ -144,7 +147,7 @@ echo "  Android 修补脚本：$root_dir/out/patch-init-boot-android.sh"
 echo "  Android 重修补配置脚本：$root_dir/out/repatch-init-boot-config-android.sh"
 echo "  arm64 静态 magiskboot：$root_dir/out/magiskboot-arm64"
 for target in "${targets[@]}"; do
-    echo "  $target：$root_dir/out/$target/dsu_permissive.ko"
+    echo "  $target：$root_dir/out/dsu_permissive-$target.ko"
 done
 if [[ "$build_all" -eq 1 ]]; then
     echo "  全 KO 自动选择刷写脚本：$root_dir/out/dsu-permissive-android-flasher.sh"

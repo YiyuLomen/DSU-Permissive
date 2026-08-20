@@ -12,7 +12,7 @@ tests/test-image-roundtrip.sh
 DDK 产物存在时，可让往返测试直接注入真实 KO：
 
 ```bash
-MODULE_UNDER_TEST=out/android15-6.6/dsu_permissive.ko \
+MODULE_UNDER_TEST=out/dsu_permissive-android15-6.6.ko \
   tests/test-image-roundtrip.sh
 ```
 
@@ -59,7 +59,7 @@ tools/build.sh --all
 | `android13-5.10` | Android 13 |
 | `android12-5.10` | Android 12 |
 
-KO 输出到 `out/<DDK target>/dsu_permissive.ko`。仅 `tools/build.sh --all` 额外生成 `out/dsu-permissive-android-flasher.sh` 自动 KMI bundle，不生成 `out/<target>/dsu-permissive-android-flasher.sh`。`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo、内嵌配置路径与模块参数声明、内嵌 DDK target、Android GKI VFS 命名空间声明、vermagic、产物是否与指定 target 一致，并拒绝导入内核文件读取链等不允许符号的 KO。
+KO 最终输出到 `out/dsu_permissive-<DDK target>.ko`，与 loader、修补脚本和自动 KMI bundle 处于同一级目录。完整构建仅额外生成 `out/dsu-permissive-android-flasher.sh` 自动 KMI bundle，不生成绑定单一 KMI 的刷写脚本。`out/.build/<DDK target>/` 仅存放 DDK 中间文件。`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo、内嵌配置路径与模块参数声明、内嵌 DDK target、Android GKI VFS 命名空间声明、vermagic、产物是否与指定 target 一致，并拒绝导入内核文件读取链等不允许符号的 KO。
 
 AVB Python 测试固定的是主机端行为契约，不会执行内核中的 C 回调。实际 fops、kprobe、KMI 和用户缓冲区路径仍必须由 DDK 构建与真机日志验证。
 

@@ -36,14 +36,12 @@ make -C "$root_dir/loader" clean all >/dev/null
 mkdir -p "$work_dir/modules"
 for target in "${targets[@]}"; do
     branch=$(kernel_branch_for_target "$target")
-    module_dir="$work_dir/modules/$target"
-    mkdir -p "$module_dir"
     vermagic="vermagic=$branch.0-$target-test SMP preempt mod_unload aarch64"
     clang --target=aarch64-linux-gnu \
         "-DTEST_VERMAGIC=\"$vermagic\"" \
         "-DTEST_DDK_TARGET=\"$target\"" \
         -c "$root_dir/tests/fake_module.S" \
-        -o "$module_dir/dsu_permissive.ko"
+        -o "$work_dir/modules/dsu_permissive-$target.ko"
 done
 
 auto_output="$work_dir/dsu-permissive-auto-flasher.sh"

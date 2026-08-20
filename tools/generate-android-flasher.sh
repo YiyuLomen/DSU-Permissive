@@ -20,7 +20,7 @@ usage() {
 用法：
   # 把全部 KO 封装，设备端按 uname -r 自动选择
   tools/generate-android-flasher.sh --target auto --output <脚本>
-      [--module-dir <包含各 target 子目录的目录>]
+      [--module-dir <包含各 target KO 的目录>]
       [--loader <dsuinit>] [--magiskboot <静态 arm64 magiskboot>]
       [--selinux <0|1>] [--avb <0|1>]
 
@@ -168,7 +168,10 @@ verify_static_magiskboot "$magiskboot"
 declare -A module_paths=()
 declare -A module_hashes=()
 for selected_target in "${selected_targets[@]}"; do
-    module_path="$module_dir/$selected_target/dsu_permissive.ko"
+    module_path="$module_dir/dsu_permissive-$selected_target.ko"
+    if [[ ! -e "$module_path" ]]; then
+        module_path="$module_dir/$selected_target/dsu_permissive.ko"
+    fi
     module_path=$(realpath -e -- "$module_path")
     "$root_dir/tools/verify-artifacts.sh" \
         --loader "$loader" --module "$module_path" \

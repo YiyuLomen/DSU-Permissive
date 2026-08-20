@@ -102,13 +102,13 @@ out/patch-init-boot-android.sh
 out/repatch-init-boot-config-android.sh
 out/magiskboot-arm64
 out/dsu-permissive-android-flasher.sh  # 仅 --all 生成，运行时自动识别 KMI
-out/android16-6.12/dsu_permissive.ko
-out/android15-6.6/dsu_permissive.ko
-out/android14-6.1/dsu_permissive.ko
-out/android14-5.15/dsu_permissive.ko
-out/android13-5.15/dsu_permissive.ko
-out/android13-5.10/dsu_permissive.ko
-out/android12-5.10/dsu_permissive.ko
+out/dsu_permissive-android16-6.12.ko
+out/dsu_permissive-android15-6.6.ko
+out/dsu_permissive-android14-6.1.ko
+out/dsu_permissive-android14-5.15.ko
+out/dsu_permissive-android13-5.15.ko
+out/dsu_permissive-android13-5.10.ko
+out/dsu_permissive-android12-5.10.ko
 ```
 
 也可以只构建不依赖内核头文件的 loader：
@@ -126,7 +126,7 @@ tools/patch-init-boot.sh \
   --input /path/to/kernelsu-patched-boot-or-init_boot.img \
   --output /path/to/dsu-permissive-boot-or-init_boot.img \
   --loader out/dsuinit \
-  --module out/android15-6.6/dsu_permissive.ko \
+  --module out/dsu_permissive-android15-6.6.ko \
   --selinux 1 --avb 1
 ```
 
