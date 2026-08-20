@@ -1,12 +1,12 @@
 # DSU-Permissive
 
-DSU-Permissive 面向 arm64 GKI，支持 `android12-5.10`、`android13-5.10`、`android13-5.15`、`android14-5.15`、`android14-6.1`、`android15-6.6` 与 `android16-6.12` 七个 DDK target。SELinux 与 AVB 拦截配置在修补时写入 `init_boot` ramdisk，默认两项均开启；启动器在加载 KO 前读取并立即删除配置文件，再将结果作为模块参数传入。在 PID 1 的 first-stage 确认当前系统确实是 DSU 后，只修改返回给该进程的顶层 vbmeta 读取视图，让后期 `libfs_avb` 将本次 DSU 启动识别为 `VerificationDisabled`；随后在 `selinux_setup` 阶段优先让原厂 init 读取到临时的：
+DSU-Permissive 面向 arm64 GKI，支持 `android12-5.10`、`android13-5.10`、`android13-5.15`、`android14-5.15`、`android14-6.1`、`android15-6.6` 与 `android16-6.12` 七个 DDK target。SELinux 与 AVB 拦截配置在修补时写入 `init_boot` ramdisk，默认两项均开启；启动器在加载 KO 前读取并立即删除配置文件，再将结果作为模块参数传入。在 PID 1 的 first-stage 确认当前系统确实是 DSU 后，AVB 拦截会临时让 `libfs_avb` 从 `/proc/bootconfig` 读取到 `verifiedbootstate=orange`，并只修改该进程的顶层 vbmeta 读取视图，使本次 DSU 启动识别为 `VerificationDisabled`；随后在 `selinux_setup` 阶段优先让原厂 init 读取到临时的：
 
 ```text
 androidboot.selinux = "permissive"
 ```
 
-对于以 `ALLOW_PERMISSIVE_SELINUX=0` 编译、会忽略该参数的 `user` init，SELinux 拦截开启时模块再通过 SELinux 自身的原始 `enforce` file operation 执行一次启动期 permissive。AVB 拦截开启时要求 bootloader 已报告 `verifiedbootstate=orange`，且 DSU 未放置 `/metadata/gsi/dsu/avb_enforce`。项目不写入或签名 vbmeta，不修改 system 或 DSU 文件，不定位或直接改写 `selinux_state`，不持续拦截 `setenforce`，也不依赖 KernelSU 源码。当前集成目标是已经由外部启动链允许启动、并由 KernelSU LKM 补丁处理过的 Android 12 `boot.img` 或 Android 13 及以上 `init_boot.img`。
+对于以 `ALLOW_PERMISSIVE_SELINUX=0` 编译、会忽略该参数的 `user` init，SELinux 拦截开启时模块再通过 SELinux 自身的原始 `enforce` file operation 执行一次启动期 permissive。AVB 拦截开启时要求外部启动链已经允许当前镜像加载，DSU 未放置 `/metadata/gsi/dsu/avb_enforce`，并且 Android 的 first-stage 通过 `/proc/bootconfig` 读取 `verifiedbootstate`；该窗口仅对 first-stage PID 1 注入 `orange`，second-stage 仍读取 bootloader 原始状态。项目不写入或签名 vbmeta，不修改 system 或 DSU 文件，不定位或直接改写 `selinux_state`，不持续拦截 `setenforce`，也不依赖 KernelSU 源码。当前集成目标是已经由外部启动链允许启动、并由 KernelSU LKM 补丁处理过的 Android 12 `boot.img` 或 Android 13 及以上 `init_boot.img`。
 
 ## 工作链
 
@@ -17,6 +17,7 @@ androidboot.selinux = "permissive"
   → KernelSU ksuinit 加载 /kernelsu.ko
   → ksuinit 将 /init 重建为指向 /init.real 的链接
   → 原厂 first-stage init
+  → PID 1 从 /proc/bootconfig 临时读取 verifiedbootstate=orange
   → PID 1 读取宿主顶层 vbmeta
   → 仅返回缓冲区中的 flags 被临时 OR 0x02
   → libfs_avb 返回 VerificationDisabled，跳过该 AVB handle 的 Hashtree
@@ -189,8 +190,9 @@ tools/unpatch-init-boot.sh \
 - 每个 GKI target 必须使用各自构建的 KO；即使内核主次版本相同，也不能在不同 Android KMI 世代之间复用模块。
 - 自动识别 KMI 的单文件刷写脚本只在 `tools/build.sh --all` 时生成，单 target 构建不会生成绑定单一 KMI 的刷写脚本。
 - 设备内核必须启用模块与 kprobe，并允许加载对应签名策略下的 KO；启用 SELinux 拦截时还要求 `CONFIG_SECURITY_SELINUX_DEVELOP`。
-- AVB 拦截开启时，后期旁路只适用于 bootloader 已报告 `verifiedbootstate=orange` 的解锁设备；若存在 `/metadata/gsi/dsu/avb_enforce`，模块会拒绝修改读取视图。
+- AVB 拦截开启时，模块只在 DSU first-stage 通过 `/proc/bootconfig` 暂时向 PID 1 提供 `verifiedbootstate=orange`；若存在 `/metadata/gsi/dsu/avb_enforce`，模块不会注入 orange 或修改 vbmeta 读取视图。
 - 模块不会绕过 bootloader 对 `boot`、`init_boot` 或磁盘 vbmeta 的校验，也不会写入、签名或持久修改 vbmeta。修改只存在于 DSU first-stage PID 1 的单次读取返回缓冲区中。
+- 若设备从 device tree、已初始化的 `ro.boot.verifiedbootstate` 或 `/proc/cmdline` 而非 `/proc/bootconfig` 取得状态，此版本不能改变该来源；KeyMint/TEE attestation 同样不受影响。
 - 顶层 `VERIFICATION_DISABLED` 会让本次 DSU 启动中由同一个 AVB handle 管理的 system、vendor、odm 等分区跳过 Hashtree，而不只影响 DSU system；正常启动仍读取磁盘原始 vbmeta。
 - 启动期 enforce fallback 只执行一次；second-stage 后模块不会阻止手动或系统主动切回 Enforcing。
 - 产物检查会拒绝导入 `filp_open` / `dentry_open` / `kernel_read` / `filp_close` 文件读取链，以及设备 GKI 签名保护不允许的 `kernel_write` / `vfs_fsync` 系列符号。

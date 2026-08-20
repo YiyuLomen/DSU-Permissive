@@ -52,12 +52,12 @@ static void stop_hooks(struct work_struct *work)
 	(void)work;
 	if (atomic_read(&phase) == DSU_PHASE_DISABLED)
 		return;
+	reason = (enum dsu_permissive_stop_reason)atomic_read(&stop_reason);
 	cancel_delayed_work(&timeout_work);
 	exec_gate_unregister();
 	vbmeta_proxy_unregister();
 	selinux_enforce_proxy_unregister();
 	bootconfig_proxy_unregister();
-	reason = (enum dsu_permissive_stop_reason)atomic_read(&stop_reason);
 	bootconfig_matches = bootconfig_proxy_match_count();
 	bootconfig_injections = bootconfig_proxy_injection_count();
 	vbmeta_matches = vbmeta_proxy_match_count();
@@ -170,4 +170,4 @@ MODULE_DESCRIPTION("按 init_boot 内嵌参数在 Android DSU first-stage 临时
 MODULE_INFO(dsu_config_path, "/dsu_permissive.conf");
 MODULE_INFO(dsu_ddk_target, DSU_DDK_TARGET);
 MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
-MODULE_VERSION("0.5.1");
+MODULE_VERSION("0.6.0");

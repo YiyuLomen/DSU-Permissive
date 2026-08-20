@@ -25,8 +25,8 @@ MODULE_UNDER_TEST=out/dsu_permissive-android15-6.6.ko \
 - `0x80000001 → 0x80000003`、已含 `0x02` 时幂等，以及分片读取边界；
 - 非 PID 1、非 WAIT 阶段、非 DSU、非目标设备、`avb_enforce` 与错误魔数均不修改；
 - “磁盘”输入字节保持不变，只修改返回缓冲区副本；
-- AOSP bootconfig 首项优先契约；
-- SELinux setup 只覆盖 `androidboot.selinux`，verified boot 状态保持原值，second-stage 恢复完整原始视图；
+- AOSP bootconfig 首项优先契约，以及 first-stage orange 与 selinux_setup permissive 两个互斥视图；
+- AVB 拦截未关闭、DSU active 且不存在 `avb_enforce` 时，first-stage 临时覆盖 `androidboot.verifiedbootstate`；second-stage 恢复完整原始视图；
 - `user` / `userdebug` init 的 enforce fallback 状态矩阵；
 - KO 不得导入 `filp_open` / `dentry_open` / `kernel_read` / `filp_close` 文件读取链，也不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
 - 主机 Bash 与 Android `/system/bin/sh` 两套脚本生成相同 `format=3` 镜像元数据布局，Android 脚本还覆盖旧补丁哈希校验、逻辑还原、loader/KO 替换与仅配置重修补往返；
@@ -78,7 +78,7 @@ tools/fetch-static-magiskboot.sh --force
 1. 镜像来自当前设备与当前槽位；
 2. 设备允许加载该 KO，且 vermagic/KMI/模块签名匹配；
 3. 已保留可恢复的原镜像和可用的 bootloader/recovery 路径；
-4. 若启用 AVB 拦截，bootloader 已报告 `verifiedbootstate=orange`，并且未创建 `/metadata/gsi/dsu/avb_enforce`；
+4. 若启用 AVB 拦截，Android first-stage 的 `fs_mgr` 从 `/proc/bootconfig` 读取 `verifiedbootstate`，并且未创建 `/metadata/gsi/dsu/avb_enforce`；
 5. 外部启动链已经允许当前 `boot` 或 `init_boot` 镜像启动。
 
 还应在刷写前用 `tools/verify-init-boot.sh --input <镜像>` 确认内嵌开关。若只测试其中一条路径，请用修补器或重修补脚本写入 `--selinux 0` 或 `--avb 0`，再刷入该镜像；被关闭路径的注入/修改计数应始终为 0。
@@ -101,6 +101,7 @@ DSU：
 dsu-permissive：已定位 first-stage vbmeta 块设备
 dsuinit：已加载并移除 init_boot 内嵌开关
 dsuinit：dsu_permissive.ko 已加载
+dsu-permissive：DSU booted 标记有效，已为 first-stage PID 1 临时注入 orange bootconfig
 dsu-permissive：已为 PID 1 临时呈现 verification-disabled vbmeta
 init: [libfs_avb] Failed to verify vbmeta digest
 init: [libfs_avb] Returning avb_handle with status: VerificationDisabled
@@ -111,7 +112,7 @@ dsu-permissive：Hook 已注销（PID 1 已进入 second_stage，vbmeta ...，�
 getenforce → Permissive
 ```
 
-修改 flags 会破坏签名或摘要，因此出现对应验证错误是预期中间状态；最终必须继续到 `VerificationDisabled`，不能停在 `AvbHandle::Open()` 失败。模块不改 verified boot bootconfig，second-stage 的 `ro.boot.verifiedbootstate` 应保持 bootloader 提供的真实 `orange`。
+修改 flags 会破坏签名或摘要，因此出现对应验证错误是预期中间状态；最终必须继续到 `VerificationDisabled`，不能停在 `AvbHandle::Open()` 失败。模块只在 first-stage 从 `/proc/bootconfig` 查询时临时提供 `orange`；second-stage 的 `ro.boot.verifiedbootstate` 应保持 bootloader 提供的原始状态。
 
 还应在启动前后比较 vbmeta 分区原始 header 或完整哈希，确认磁盘 flags 没有变化。DSU 中由同一顶层 AVB handle 管理的 system、vendor、odm 等条目可能都出现 `Top-level vbmeta is disabled`，这是该方案的预期作用范围。
 

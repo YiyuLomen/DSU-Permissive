@@ -26,6 +26,8 @@
 
 static const char permissive_prefix[] =
 	"androidboot.selinux = \"permissive\"\n";
+static const char orange_prefix[] =
+	"androidboot.verifiedbootstate = \"orange\"\n";
 
 enum injection_decision {
 	INJECTION_UNCHECKED = 0,
@@ -42,13 +44,16 @@ struct bootconfig_slot {
 	struct mutex io_lock;
 	bool ops_initialized;
 	enum injection_decision decision;
+	const char *prefix;
+	size_t prefix_size;
 };
 
 static struct bootconfig_slot slots[BOOTCONFIG_SLOT_COUNT];
 static DEFINE_SPINLOCK(slots_lock);
 static atomic64_t matched_files = ATOMIC64_INIT(0);
 static atomic64_t injected_files = ATOMIC64_INIT(0);
-static atomic_t injection_logged = ATOMIC_INIT(0);
+static atomic_t orange_injection_logged = ATOMIC_INIT(0);
+static atomic_t permissive_injection_logged = ATOMIC_INIT(0);
 static bool kprobe_registered;
 
 static ssize_t proxy_read(struct file *file, char __user *buffer,
@@ -91,10 +96,27 @@ static bool is_proc_bootconfig(struct file *file)
 static bool decide_injection(struct bootconfig_slot *slot)
 {
 	if (slot->decision == INJECTION_UNCHECKED) {
-		if (dsu_detect_active() && dsu_config_selinux_intercept()) {
+		enum dsu_permissive_phase phase = dsu_permissive_phase_get();
+
+		if (!dsu_detect_active()) {
+			slot->decision = INJECTION_DISABLED;
+		} else if (phase == DSU_PHASE_WAIT_SYSTEM_INIT &&
+			   dsu_config_avb_intercept() &&
+			   !dsu_detect_avb_enforced()) {
 			slot->decision = INJECTION_ENABLED;
+			slot->prefix = orange_prefix;
+			slot->prefix_size = sizeof(orange_prefix) - 1;
 			atomic64_inc(&injected_files);
-			if (atomic_cmpxchg(&injection_logged, 0, 1) == 0)
+			if (atomic_cmpxchg(&orange_injection_logged, 0, 1) == 0) {
+				pr_info("dsu-permissive：DSU booted 标记有效，已为 first-stage PID 1 临时注入 orange bootconfig\n");
+			}
+		} else if (phase == DSU_PHASE_SELINUX_SETUP_ARMED &&
+			   dsu_config_selinux_intercept()) {
+			slot->decision = INJECTION_ENABLED;
+			slot->prefix = permissive_prefix;
+			slot->prefix_size = sizeof(permissive_prefix) - 1;
+			atomic64_inc(&injected_files);
+			if (atomic_cmpxchg(&permissive_injection_logged, 0, 1) == 0)
 				pr_info("dsu-permissive：DSU booted 标记有效，已为 PID 1 注入 permissive bootconfig\n");
 		} else {
 			slot->decision = INJECTION_DISABLED;
@@ -104,8 +126,8 @@ static bool decide_injection(struct bootconfig_slot *slot)
 	return slot->decision == INJECTION_ENABLED;
 }
 
-static ssize_t emit_prefix_to_user(char __user *buffer, size_t count,
-				   loff_t *position)
+static ssize_t emit_prefix_to_user(const struct bootconfig_slot *slot,
+				   char __user *buffer, size_t count, loff_t *position)
 {
 	size_t available;
 	size_t copied;
@@ -113,12 +135,12 @@ static ssize_t emit_prefix_to_user(char __user *buffer, size_t count,
 
 	if (!position || *position < 0)
 		return -EINVAL;
-	if (*position >= sizeof(permissive_prefix) - 1)
+	if (*position >= slot->prefix_size)
 		return 0;
 
-	available = sizeof(permissive_prefix) - 1 - (size_t)*position;
+	available = slot->prefix_size - (size_t)*position;
 	copied = min(count, available);
-	not_copied = copy_to_user(buffer, permissive_prefix + *position, copied);
+	not_copied = copy_to_user(buffer, slot->prefix + *position, copied);
 	copied -= not_copied;
 	if (!copied)
 		return -EFAULT;
@@ -153,21 +175,22 @@ static ssize_t proxy_read(struct file *file, char __user *buffer,
 		goto out;
 	}
 
-	result = emit_prefix_to_user(buffer, count, position);
+	result = emit_prefix_to_user(slot, buffer, count, position);
 	if (result)
 		goto out;
 
-	original_position = *position - (sizeof(permissive_prefix) - 1);
+	original_position = *position - slot->prefix_size;
 	result = slot->original_ops->read(file, buffer, count,
 					  &original_position);
 	if (original_position >= 0)
-		*position = original_position + sizeof(permissive_prefix) - 1;
+		*position = original_position + slot->prefix_size;
 out:
 	mutex_unlock(&slot->io_lock);
 	return result;
 }
 
-static ssize_t emit_prefix_to_iter(struct kiocb *iocb, struct iov_iter *to)
+static ssize_t emit_prefix_to_iter(const struct bootconfig_slot *slot,
+				   struct kiocb *iocb, struct iov_iter *to)
 {
 	size_t available;
 	size_t copied;
@@ -175,12 +198,12 @@ static ssize_t emit_prefix_to_iter(struct kiocb *iocb, struct iov_iter *to)
 
 	if (iocb->ki_pos < 0)
 		return -EINVAL;
-	if (iocb->ki_pos >= sizeof(permissive_prefix) - 1)
+	if (iocb->ki_pos >= slot->prefix_size)
 		return 0;
 
-	available = sizeof(permissive_prefix) - 1 - (size_t)iocb->ki_pos;
+	available = slot->prefix_size - (size_t)iocb->ki_pos;
 	requested = min(iov_iter_count(to), available);
-	copied = copy_to_iter(permissive_prefix + iocb->ki_pos, requested, to);
+	copied = copy_to_iter(slot->prefix + iocb->ki_pos, requested, to);
 	if (!copied)
 		return -EFAULT;
 
@@ -213,14 +236,14 @@ static ssize_t proxy_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		goto out;
 	}
 
-	result = emit_prefix_to_iter(iocb, to);
+	result = emit_prefix_to_iter(slot, iocb, to);
 	if (result)
 		goto out;
 
-	iocb->ki_pos -= sizeof(permissive_prefix) - 1;
+	iocb->ki_pos -= slot->prefix_size;
 	result = slot->original_ops->read_iter(iocb, to);
 	if (iocb->ki_pos >= 0)
-		iocb->ki_pos += sizeof(permissive_prefix) - 1;
+		iocb->ki_pos += slot->prefix_size;
 out:
 	mutex_unlock(&slot->io_lock);
 	return result;
@@ -256,7 +279,7 @@ static loff_t proxy_llseek(struct file *file, loff_t offset, int whence)
 			goto out;
 		}
 		if (check_add_overflow(original_result,
-				       (loff_t)(sizeof(permissive_prefix) - 1),
+				       (loff_t)slot->prefix_size,
 				       &logical_position)) {
 			result = -EOVERFLOW;
 			goto out;
@@ -283,7 +306,7 @@ static loff_t proxy_llseek(struct file *file, loff_t offset, int whence)
 		goto out;
 	}
 
-	if (logical_position <= sizeof(permissive_prefix) - 1) {
+	if (logical_position <= slot->prefix_size) {
 		original_result = slot->original_ops->llseek(file, 0, SEEK_SET);
 		if (original_result < 0) {
 			result = original_result;
@@ -295,12 +318,12 @@ static loff_t proxy_llseek(struct file *file, loff_t offset, int whence)
 	}
 
 	original_result = slot->original_ops->llseek(file,
-		logical_position - (sizeof(permissive_prefix) - 1), SEEK_SET);
+		logical_position - slot->prefix_size, SEEK_SET);
 	if (original_result < 0) {
 		result = original_result;
 		goto out;
 	}
-	result = original_result + sizeof(permissive_prefix) - 1;
+	result = original_result + slot->prefix_size;
 	file->f_pos = result;
 out:
 	mutex_unlock(&slot->io_lock);
@@ -325,6 +348,8 @@ static int proxy_release(struct inode *inode, struct file *file)
 	spin_lock_irqsave(&slots_lock, flags);
 	WRITE_ONCE(slot->file, NULL);
 	slot->decision = INJECTION_UNCHECKED;
+	slot->prefix = NULL;
+	slot->prefix_size = 0;
 	spin_unlock_irqrestore(&slots_lock, flags);
 	mutex_unlock(&slot->io_lock);
 
@@ -373,6 +398,8 @@ static void attach_proxy(struct file *file)
 		slot->ops_initialized = true;
 	}
 	slot->decision = INJECTION_UNCHECKED;
+	slot->prefix = NULL;
+	slot->prefix_size = 0;
 	WRITE_ONCE(slot->file, file);
 	/* f_op 发布后，代理回调必须能看到上面的完整槽位状态。 */
 	smp_wmb();
@@ -380,6 +407,8 @@ static void attach_proxy(struct file *file)
 	    original_ops) {
 		WRITE_ONCE(slot->file, NULL);
 		slot->decision = INJECTION_UNCHECKED;
+		slot->prefix = NULL;
+		slot->prefix_size = 0;
 		release_module = true;
 		goto out;
 	}
@@ -393,10 +422,13 @@ out:
 static int on_vfs_read(struct kprobe *probe, struct pt_regs *registers)
 {
 	struct file *file;
+	enum dsu_permissive_phase phase;
 
 	(void)probe;
 
-	if (dsu_permissive_phase_get() != DSU_PHASE_SELINUX_SETUP_ARMED ||
+	phase = dsu_permissive_phase_get();
+	if ((phase != DSU_PHASE_WAIT_SYSTEM_INIT &&
+	     phase != DSU_PHASE_SELINUX_SETUP_ARMED) ||
 	    current->pid != 1)
 		return 0;
 

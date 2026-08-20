@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-目标是在 DSU 已经完成映射后完成两件事：先在 first-stage 的 AVB 复验窗口内，只向 PID 1 临时呈现带 `VERIFICATION_DISABLED` 标志的顶层 vbmeta；再在 SELinux enforcement 尚未由 init 最终确定的窗口内，优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不写磁盘 vbmeta，不伪造 verified boot 状态，不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
+目标是在 DSU 已经完成映射后完成两件事：先在 first-stage 的 AVB 复验窗口内，只向 PID 1 临时呈现 `androidboot.verifiedbootstate=orange` 与带 `VERIFICATION_DISABLED` 标志的顶层 vbmeta；再在 SELinux enforcement 尚未由 init 最终确定的窗口内，优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不写磁盘 vbmeta，不持久化 verified boot 状态，不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
 
 模块只支持 arm64 GKI，以及 `android12-5.10`、`android13-5.10`、`android13-5.15`、`android14-5.15`、`android14-6.1`、`android15-6.6`、`android16-6.12` 七个 DDK target。对应的 AOSP Android 12 至 Android 16 init 均在加载 policy 后调用 `SelinuxSetEnforcement()`，并通过 fs_mgr 读取 cmdline/bootconfig；fs_mgr 对重复 bootconfig 键采用第一项。Android 11 及以下和非 GKI 内核不在支持范围内。
 
@@ -33,7 +33,8 @@ avb_intercept=0|1
 WAIT_SYSTEM_INIT
   │ 后台解析 by-name/vbmeta[_a|_b] 的块设备 dev_t
   │ PID 1 读取目标块设备，且 DSU booted 标记存在
-  │ avb_enforce 不存在时，仅修改返回缓冲区的 flags
+  │ avb_enforce 不存在时，对 PID 1 的 bootconfig 临时注入 orange
+  │ 仅修改 vbmeta 返回缓冲区的 flags
   │ 磁盘内容与其他进程视图保持不变
   │ PID 1 第一次 exec /system/bin/init
   ▼
@@ -92,7 +93,7 @@ AOSP `libfs_avb` 通过 `pread64(offset=0)` 读取顶层 vbmeta。支持的 GKI 
 
 `AvbVBMetaImageHeader.flags` 位于 `[120,124)`，序列化时使用网络字节序。`AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED` 是 `1 << 1`，因此代理只对绝对偏移 `123` 的原字节执行 `OR 0x02`。例如 `0x80000001` 变为 `0x80000003`，其他位不会被覆盖。修改发生在用户读取缓冲区，磁盘分区、页缓存中的源数据和其他进程视图均不改变。
 
-修改 flags 会使 vbmeta 的签名或 bootloader 提供的摘要不再匹配。该路径依赖解锁设备已经由 bootloader 报告 `verifiedbootstate=orange`，让 `libfs_avb` 接受验证错误并继续把修改后的顶层 header 识别为 `VerificationDisabled`。模块不修改 `/proc/bootconfig` 中的 verified boot 字段；若 `avb_enforce` 存在，则拒绝修改并记录错误，避免在强制验证模式下把启动变成硬失败。
+修改 flags 会使 vbmeta 的签名或 bootloader 提供的摘要不再匹配。first-stage 中，bootconfig 代理会在 PID 1 读取 `/proc/bootconfig` 时把 `androidboot.verifiedbootstate = "orange"` 放在原始条目之前；AOSP `fs_mgr` 对重复键取首项，因而 `IsDeviceUnlocked()` 会允许验证错误，并继续把修改后的顶层 header 识别为 `VerificationDisabled`。代理只在 `WAIT_SYSTEM_INIT` 阶段选择这个前缀，首次 exec `/system/bin/init` 后的 SELinux 视图不含该键，second-stage 读取的仍是 bootloader 原始状态。若 `avb_enforce` 存在，则不注入 orange、不修改 vbmeta 并记录错误，避免在强制验证模式下把启动变成硬失败。
 
 顶层状态为 `VerificationDisabled` 后，同一个 `AvbHandle` 管理的分区都会跳过 Hashtree，包括本次 DSU 启动涉及的宿主 vendor、odm 等条目，不仅是 DSU system。该影响仅存在于本次 first-stage 的内存视图，正常启动仍使用磁盘上的真实 vbmeta。
 
@@ -107,7 +108,7 @@ AOSP `libfs_avb` 通过 `pread64(offset=0)` 读取顶层 vbmeta。支持的 GKI 
 
 ## bootconfig fops 代理
 
-`bootconfig_proxy.c` 在 `vfs_read` 入口安装 kprobe，并且只在 `SELINUX_SETUP_ARMED` 阶段工作。pre-handler 不执行路径查找或其他可睡眠操作，只完成：
+`bootconfig_proxy.c` 在 `vfs_read` 入口安装 kprobe，并且只在 `WAIT_SYSTEM_INIT` 或 `SELINUX_SETUP_ARMED` 阶段工作。pre-handler 不执行路径查找或其他可睡眠操作，只完成：
 
 - 状态与 PID 检查；
 - `PROC_SUPER_MAGIC`、根 dentry 和 `bootconfig` 文件名检查；
@@ -130,7 +131,14 @@ AOSP 的 `IsGsiRunning()` 仅使用该标记。first-stage init 会在判断 DSU
 
 ## 流视图
 
-注入视图为：
+在 `WAIT_SYSTEM_INIT`，仅当 AVB 拦截开启且不存在 `avb_enforce` 时，注入视图为：
+
+```text
+androidboot.verifiedbootstate = "orange"\n
+<原始 /proc/bootconfig 内容>
+```
+
+在 `SELINUX_SETUP_ARMED`，仅当 SELinux 拦截开启时，注入视图为：
 
 ```text
 androidboot.selinux = "permissive"\n
@@ -141,7 +149,7 @@ androidboot.selinux = "permissive"\n
 
 代理 fops 的 owner 指向本模块。附加时取得模块引用，`__fput()` 在代理 `release` 返回后释放该引用，避免 file 尚未关闭时卸载模块代码。原 procfs fops 必须属于内核本体（owner 为空），否则拒绝附加。
 
-该代理只注入 `androidboot.selinux=permissive`，不会修改 `androidboot.verifiedbootstate` 或 `androidboot.vbmeta.device_state`。second-stage 注销后读取到的仍是原始 bootconfig。
+first-stage orange 视图只影响从 `/proc/bootconfig` 读取 `verifiedbootstate` 的 `fs_mgr` 调用；device tree、已存在的 `ro.boot.verifiedbootstate` 与 `/proc/cmdline` 优先级更高时不会被改变。它不修改 `androidboot.vbmeta.device_state`，也不影响 KeyMint/TEE attestation。second-stage 注销后读取到的仍是原始 bootconfig。
 
 ## selinuxfs enforce 启动期 fallback
 
@@ -187,7 +195,7 @@ fs_mgr 的 `GetBootconfigFromString()` 在首次找到目标 key 后不再覆盖
 - `/init.next` 执行失败：依次尝试 `/init.real` 与 `/system/bin/init`，所有失败均记录。
 - tracepoint 或 kprobe 注册失败：KO 加载失败并保留明确内核日志，系统启动仍由 loader 继续。
 - vbmeta by-name 路径未及时解析或目标 read 未命中：不修改任何块设备数据，`libfs_avb` 按原始结果继续。
-- 设备不是 `orange`：模块不会伪造该状态；修改后的签名错误可能不被接受，因此不满足使用前提。
+- `fs_mgr` 不从 `/proc/bootconfig` 读取 `verifiedbootstate`：模块无法伪装该来源；修改后的签名错误可能不被接受，因此启动不满足使用前提。
 - `/metadata/gsi/dsu/avb_enforce` 存在：拒绝修改 vbmeta 返回视图并记录错误。
 - vbmeta 魔数不匹配或用户缓冲区修改失败：保留原 read 返回值、记录错误，`libfs_avb` 看到原始数据。
 - DSU booted 标记不存在：读取原 bootconfig，不注入。

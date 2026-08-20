@@ -54,6 +54,8 @@ def main() -> None:
         "selinux_intercept=1 selinux_intercept=0 avb_intercept=1",
         "avb_intercept=0\nselinux_intercept=1",
         "selinux_intercept=1\n\navb_intercept=0",
+        "selinux_intercept=1\navb_intercept=1\nmetadata_error_log=2",
+        "selinux_intercept=1\navb_intercept=1\nmetadata_error_log=0\nextra=1",
     ):
         try:
             parse_config(invalid)

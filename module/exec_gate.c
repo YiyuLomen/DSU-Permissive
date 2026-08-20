@@ -78,4 +78,3 @@ void exec_gate_unregister(void)
 	tracepoint_registered = false;
 	sched_exec_tracepoint = NULL;
 }
-
