@@ -51,6 +51,7 @@ if ! grep -q 'Type:.*REL' <<<"$module_header" ||
     exit 1
 fi
 module_modinfo=$(llvm-readelf -p .modinfo "$module")
+module_modinfo_values=$(sed -E 's/^\[[^]]*\][[:space:]]*//' <<<"$module_modinfo")
 if ! grep -q 'license=GPL' <<<"$module_modinfo"; then
     echo "错误：内核模块缺少 GPL modinfo" >&2
     exit 1
@@ -73,10 +74,15 @@ if ! grep -q 'dsu_ddk_target=' <<<"$module_modinfo"; then
     echo "错误：内核模块缺少 DDK target 声明" >&2
     exit 1
 fi
-if ! grep -q 'import_ns=ANDROID_GKI_VFS_EXPORT_ONLY' <<<"$module_modinfo"; then
-    echo "错误：内核模块缺少 Android GKI VFS 符号命名空间声明" >&2
-    exit 1
-fi
+for required_namespace in \
+    ANDROID_GKI_VFS_EXPORT_ONLY \
+    VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver; do
+    if ! grep -Fxq "import_ns=$required_namespace" \
+        <<<"$module_modinfo_values"; then
+        echo "错误：内核模块缺少符号命名空间声明 $required_namespace" >&2
+        exit 1
+    fi
+done
 if [[ -n "$target" ]]; then
     expected_kernel=${target#*-}
     if [[ "$expected_kernel" == "$target" ]]; then

@@ -25,6 +25,8 @@ avb_intercept=0|1
 
 厂商 GKI 对外部 LKM 的符号策略不能只由 DDK 编译判断：已观察到 `filp_open` 未导出、`dentry_open` 位于仅供文件系统实现使用的内部命名空间、`kernel_read` 被标记为 protected symbol。为避免 KO 在 PID 1 first-stage 加载时直接失败，模块不导入 `filp_open`、`dentry_open`、`kernel_read` 或 `filp_close`，只从 `finit_module()` 接收两个布尔参数。`selinux_intercept=0` 禁用 bootconfig 注入与 enforce 切换；`avb_intercept=0` 让 vbmeta 代理始终透传原始读取结果。未指定修补器参数时两项均为 `1`。
 
+模块仍通过 `kern_path()` 检查 DSU 标记并解析 vbmeta by-name 路径，因此同时声明 `ANDROID_GKI_VFS_EXPORT_ONLY` 与 `VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver` 两个独立的 import namespace。部分厂商 6.6 GKI 会对 `kern_path` 强制校验后一个 namespace；缺失时 `finit_module()` 会以 `EINVAL` 失败并记录 `Unknown symbol kern_path (err -22)`。
+
 需要变更开关时重新修补镜像；Android 端 `repatch-init-boot-config-android.sh` 用 `--replace-existing --reuse-existing` 验证旧补丁，然后只替换内嵌配置并保留 loader、KO 和原 init。
 
 ## 状态机

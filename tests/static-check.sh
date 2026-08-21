@@ -61,6 +61,16 @@ tools/verify-artifacts.sh \
     --module "$work_dir/valid-module.ko" \
     --target android16-6.12 >/dev/null
 clang --target=aarch64-linux-gnu \
+    -DTEST_OMIT_INTERNAL_VFS_NAMESPACE \
+    -c tests/fake_module.S -o "$work_dir/missing-vfs-namespace-module.ko"
+if tools/verify-artifacts.sh \
+    --loader loader/dsuinit \
+    --module "$work_dir/missing-vfs-namespace-module.ko" \
+    --target android16-6.12 >/dev/null 2>&1; then
+    echo "错误：产物验证器接受了缺少 kern_path VFS 命名空间的模块" >&2
+    exit 1
+fi
+clang --target=aarch64-linux-gnu \
     -DTEST_UNDEFINED_SYMBOL=filp_open \
     -c tests/fake_module.S -o "$work_dir/filp-open-module.ko"
 if tools/verify-artifacts.sh \

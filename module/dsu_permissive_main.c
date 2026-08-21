@@ -170,4 +170,5 @@ MODULE_DESCRIPTION("按 init_boot 内嵌参数在 Android DSU first-stage 临时
 MODULE_INFO(dsu_config_path, "/dsu_permissive.conf");
 MODULE_INFO(dsu_ddk_target, DSU_DDK_TARGET);
 MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
-MODULE_VERSION("0.6.0");
+MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+MODULE_VERSION("0.6.1");

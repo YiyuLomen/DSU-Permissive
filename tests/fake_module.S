@@ -14,6 +14,9 @@
 	.ascii "dsu_ddk_target="
 	.asciz TEST_DDK_TARGET
 	.asciz "import_ns=ANDROID_GKI_VFS_EXPORT_ONLY"
+#ifndef TEST_OMIT_INTERNAL_VFS_NAMESPACE
+	.asciz "import_ns=VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver"
+#endif
 #ifdef TEST_UNDEFINED_SYMBOL
 	.section .text, "ax", %progbits
 	.global test_undefined_symbol

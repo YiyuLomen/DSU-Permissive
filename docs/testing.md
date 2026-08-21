@@ -28,7 +28,7 @@ MODULE_UNDER_TEST=out/dsu_permissive-android15-6.6.ko \
 - AOSP bootconfig 首项优先契约，以及 first-stage orange 与 selinux_setup permissive 两个互斥视图；
 - AVB 拦截未关闭、DSU active 且不存在 `avb_enforce` 时，first-stage 临时覆盖 `androidboot.verifiedbootstate`；second-stage 恢复完整原始视图；
 - `user` / `userdebug` init 的 enforce fallback 状态矩阵；
-- KO 不得导入 `filp_open` / `dentry_open` / `kernel_read` / `filp_close` 文件读取链，也不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
+- KO 必须分别声明 Android GKI VFS 与 `kern_path` 内部 VFS namespace；不得导入 `filp_open` / `dentry_open` / `kernel_read` / `filp_close` 文件读取链，也不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
 - 主机 Bash 与 Android `/system/bin/sh` 两套脚本生成相同 `format=3` 镜像元数据布局，Android 脚本还覆盖旧补丁哈希校验、逻辑还原、loader/KO 替换与仅配置重修补往返；
 - 单文件 Android 刷写生成器覆盖自动 KMI bundle 的资源哈希、自校验和 target 选择；不要求构建单一 KMI 绑定的刷写产物；
 - 可代表 Android 12 `boot.img` 或 Android 13 及以上 `init_boot.img` 的最小 boot header v4 镜像往返；
@@ -59,7 +59,7 @@ tools/build.sh --all
 | `android13-5.10` | Android 13 |
 | `android12-5.10` | Android 12 |
 
-KO 最终输出到 `out/dsu_permissive-<DDK target>.ko`，与 loader、修补脚本和自动 KMI bundle 处于同一级目录。完整构建仅额外生成 `out/dsu-permissive-android-flasher.sh` 自动 KMI bundle，不生成绑定单一 KMI 的刷写脚本。`out/.build/<DDK target>/` 仅存放 DDK 中间文件。`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo、内嵌配置路径与模块参数声明、内嵌 DDK target、Android GKI VFS 命名空间声明、vermagic、产物是否与指定 target 一致，并拒绝导入内核文件读取链等不允许符号的 KO。
+KO 最终输出到 `out/dsu_permissive-<DDK target>.ko`，与 loader、修补脚本和自动 KMI bundle 处于同一级目录。完整构建仅额外生成 `out/dsu-permissive-android-flasher.sh` 自动 KMI bundle，不生成绑定单一 KMI 的刷写脚本。`out/.build/<DDK target>/` 仅存放 DDK 中间文件。`tools/verify-artifacts.sh` 会检查 loader/KO 的 ELF 架构、类型、动态依赖、GPL modinfo、内嵌配置路径与模块参数声明、内嵌 DDK target、两个独立的 VFS 命名空间声明、vermagic、产物是否与指定 target 一致，并拒绝导入内核文件读取链等不允许符号的 KO。
 
 AVB Python 测试固定的是主机端行为契约，不会执行内核中的 C 回调。实际 fops、kprobe、KMI 和用户缓冲区路径仍必须由 DDK 构建与真机日志验证。
 
