@@ -7,8 +7,8 @@ from dataclasses import dataclass
 AVB_MAGIC = b"AVB0"
 AVB_HEADER_SIZE = 256
 AVB_FLAGS_OFFSET = 120
-AVB_VERIFICATION_DISABLED_OFFSET = AVB_FLAGS_OFFSET + 3
-AVB_VERIFICATION_DISABLED_MASK = 0x02
+AVB_HASHTREE_DISABLED_OFFSET = AVB_FLAGS_OFFSET + 3
+AVB_HASHTREE_DISABLED_MASK = 0x01
 
 
 @dataclass
@@ -57,10 +57,10 @@ def proxy_read(
                 state.header_rejected = True
 
     if state.header_confirmed and contains(
-        read_offset, len(returned), AVB_VERIFICATION_DISABLED_OFFSET, 1
+        read_offset, len(returned), AVB_HASHTREE_DISABLED_OFFSET, 1
     ):
-        relative = AVB_VERIFICATION_DISABLED_OFFSET - read_offset
-        returned[relative] |= AVB_VERIFICATION_DISABLED_MASK
+        relative = AVB_HASHTREE_DISABLED_OFFSET - read_offset
+        returned[relative] |= AVB_HASHTREE_DISABLED_MASK
     return bytes(returned)
 
 
@@ -76,14 +76,14 @@ def flags_from(data: bytes) -> int:
 
 
 def main() -> None:
-    assert AVB_VERIFICATION_DISABLED_OFFSET == 123
+    assert AVB_HASHTREE_DISABLED_OFFSET == 123
 
-    disk = make_vbmeta(0x80000001)
+    disk = make_vbmeta(0x80000002)
     patched = proxy_read(disk, 0, len(disk), ProxyState())
     assert flags_from(patched) == 0x80000003
-    assert disk == make_vbmeta(0x80000001)
+    assert disk == make_vbmeta(0x80000002)
 
-    already_disabled = make_vbmeta(0x00000002)
+    already_disabled = make_vbmeta(0x00000001)
     assert (
         proxy_read(already_disabled, 0, len(already_disabled), ProxyState())
         == already_disabled

@@ -31,9 +31,9 @@
 #define AVB_VBMETA_MAGIC_OFFSET 0U
 #define AVB_VBMETA_MAGIC_SIZE 4U
 #define AVB_VBMETA_FLAGS_OFFSET 120U
-#define AVB_VBMETA_VERIFICATION_DISABLED_BYTE_OFFSET \
+#define AVB_VBMETA_HASHTREE_DISABLED_BYTE_OFFSET \
 	(AVB_VBMETA_FLAGS_OFFSET + 3U)
-#define AVB_VBMETA_VERIFICATION_DISABLED_BYTE_MASK 0x02U
+#define AVB_VBMETA_HASHTREE_DISABLED_BYTE_MASK 0x01U
 
 struct vbmeta_slot {
 	struct file *file;
@@ -232,7 +232,8 @@ static int inspect_user_magic(struct vbmeta_slot *slot, char __user *buffer,
 }
 
 static int patch_user_buffer(struct vbmeta_slot *slot, char __user *buffer,
-			     loff_t position, ssize_t read_size)
+			     loff_t position, ssize_t read_size,
+			     u8 *old_flags, u8 *new_flags)
 {
 	u8 flags_byte;
 	size_t relative;
@@ -243,16 +244,20 @@ static int patch_user_buffer(struct vbmeta_slot *slot, char __user *buffer,
 		return error;
 	if (!read_contains_region(
 			position, read_size,
-			AVB_VBMETA_VERIFICATION_DISABLED_BYTE_OFFSET, 1))
+			AVB_VBMETA_HASHTREE_DISABLED_BYTE_OFFSET, 1))
 		return 0;
 
-	relative = AVB_VBMETA_VERIFICATION_DISABLED_BYTE_OFFSET -
+	relative = AVB_VBMETA_HASHTREE_DISABLED_BYTE_OFFSET -
 		   (size_t)position;
 	if (copy_from_user(&flags_byte, buffer + relative, 1))
 		return -EFAULT;
-	if (flags_byte & AVB_VBMETA_VERIFICATION_DISABLED_BYTE_MASK)
+	if (old_flags)
+		*old_flags = flags_byte;
+	if (flags_byte & AVB_VBMETA_HASHTREE_DISABLED_BYTE_MASK)
 		return 0;
-	flags_byte |= AVB_VBMETA_VERIFICATION_DISABLED_BYTE_MASK;
+	flags_byte |= AVB_VBMETA_HASHTREE_DISABLED_BYTE_MASK;
+	if (new_flags)
+		*new_flags = flags_byte;
 	return copy_to_user(buffer + relative, &flags_byte, 1) ? -EFAULT : 1;
 }
 
@@ -294,11 +299,13 @@ static ssize_t read_original(struct vbmeta_slot *slot, struct file *file,
 	return result;
 }
 
-static void record_patch(void)
+static void record_patch(loff_t position, ssize_t read_size,
+			 u8 old_flags, u8 new_flags)
 {
 	atomic64_inc(&patched_reads);
 	if (atomic_cmpxchg(&patch_logged, 0, 1) == 0)
-		pr_info("dsu-permissive：已为 PID 1 临时呈现 verification-disabled vbmeta\n");
+		pr_info("dsu-permissive：已为 PID 1 临时呈现 hashtree-disabled vbmeta（offset=%lld，count=%zd，flags=0x%02x->0x%02x）\n",
+			position, read_size, old_flags, new_flags);
 }
 
 static ssize_t proxy_read(struct file *file, char __user *buffer,
@@ -308,6 +315,8 @@ static ssize_t proxy_read(struct file *file, char __user *buffer,
 	loff_t start;
 	ssize_t result;
 	int patch_result;
+	u8 old_flags = 0;
+	u8 new_flags = 0;
 
 	if (!slot)
 		return -EIO;
@@ -325,13 +334,14 @@ static ssize_t proxy_read(struct file *file, char __user *buffer,
 	if (result <= 0 || !should_patch(slot))
 		goto out;
 
-	patch_result = patch_user_buffer(slot, buffer, start, result);
+	patch_result = patch_user_buffer(slot, buffer, start, result,
+					 &old_flags, &new_flags);
 	if (patch_result < 0) {
 		atomic64_inc(&proxy_errors);
 		pr_err("dsu-permissive：修改 vbmeta 用户态读取视图失败：%d\n",
 		       patch_result);
 	} else if (patch_result > 0) {
-		record_patch();
+		record_patch(start, result, old_flags, new_flags);
 	}
 out:
 	mutex_unlock(&slot->io_lock);

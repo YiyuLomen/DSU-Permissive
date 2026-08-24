@@ -20,14 +20,24 @@
 #include "dsu_config.h"
 #include "dsu_detect.h"
 #include "dsu_permissive.h"
+#include "vbmeta_proxy.h"
 
 #define BOOTCONFIG_NAME "bootconfig"
 #define BOOTCONFIG_SLOT_COUNT 2
 
-static const char permissive_prefix[] =
+static const char selinux_prefix[] =
 	"androidboot.selinux = \"permissive\"\n";
-static const char orange_prefix[] =
+/*
+ * vbmeta 运行时视图已经是 HashtreeDisabled；selinux_setup 中同步
+ * veritymode，避免 vivo vfcheck 继续按 eio 模式执行关键文件探测。
+ */
+static const char first_stage_avb_prefix[] =
 	"androidboot.verifiedbootstate = \"orange\"\n";
+static const char selinux_avb_prefix[] =
+	"androidboot.veritymode = \"disabled\"\n"
+	"androidboot.selinux = \"permissive\"\n";
+static const char avb_prefix[] =
+	"androidboot.veritymode = \"disabled\"\n";
 
 enum injection_decision {
 	INJECTION_UNCHECKED = 0,
@@ -53,6 +63,7 @@ static DEFINE_SPINLOCK(slots_lock);
 static atomic64_t matched_files = ATOMIC64_INIT(0);
 static atomic64_t injected_files = ATOMIC64_INIT(0);
 static atomic_t orange_injection_logged = ATOMIC_INIT(0);
+static atomic_t verity_injection_logged = ATOMIC_INIT(0);
 static atomic_t permissive_injection_logged = ATOMIC_INIT(0);
 static bool kprobe_registered;
 
@@ -97,26 +108,42 @@ static bool decide_injection(struct bootconfig_slot *slot)
 {
 	if (slot->decision == INJECTION_UNCHECKED) {
 		enum dsu_permissive_phase phase = dsu_permissive_phase_get();
+		bool avb_enabled = dsu_config_avb_intercept() &&
+			!dsu_detect_avb_enforced();
+		bool avb_hashtree_disabled_view = avb_enabled &&
+			vbmeta_proxy_patch_count() > 0;
+		bool selinux_view = dsu_config_selinux_intercept();
 
 		if (!dsu_detect_active()) {
 			slot->decision = INJECTION_DISABLED;
 		} else if (phase == DSU_PHASE_WAIT_SYSTEM_INIT &&
-			   dsu_config_avb_intercept() &&
-			   !dsu_detect_avb_enforced()) {
+			   avb_enabled) {
 			slot->decision = INJECTION_ENABLED;
-			slot->prefix = orange_prefix;
-			slot->prefix_size = sizeof(orange_prefix) - 1;
+			slot->prefix = first_stage_avb_prefix;
+			slot->prefix_size = sizeof(first_stage_avb_prefix) - 1;
 			atomic64_inc(&injected_files);
 			if (atomic_cmpxchg(&orange_injection_logged, 0, 1) == 0) {
 				pr_info("dsu-permissive：DSU booted 标记有效，已为 first-stage PID 1 临时注入 orange bootconfig\n");
 			}
 		} else if (phase == DSU_PHASE_SELINUX_SETUP_ARMED &&
-			   dsu_config_selinux_intercept()) {
+			   (avb_hashtree_disabled_view || selinux_view)) {
 			slot->decision = INJECTION_ENABLED;
-			slot->prefix = permissive_prefix;
-			slot->prefix_size = sizeof(permissive_prefix) - 1;
+			if (avb_hashtree_disabled_view && selinux_view) {
+				slot->prefix = selinux_avb_prefix;
+				slot->prefix_size = sizeof(selinux_avb_prefix) - 1;
+			} else if (avb_hashtree_disabled_view) {
+				slot->prefix = avb_prefix;
+				slot->prefix_size = sizeof(avb_prefix) - 1;
+			} else {
+				slot->prefix = selinux_prefix;
+				slot->prefix_size = sizeof(selinux_prefix) - 1;
+			}
 			atomic64_inc(&injected_files);
-			if (atomic_cmpxchg(&permissive_injection_logged, 0, 1) == 0)
+			if (avb_hashtree_disabled_view &&
+			    atomic_cmpxchg(&verity_injection_logged, 0, 1) == 0)
+				pr_info("dsu-permissive：已为 vivo vfcheck 临时注入 veritymode=disabled\n");
+			if (selinux_view &&
+			    atomic_cmpxchg(&permissive_injection_logged, 0, 1) == 0)
 				pr_info("dsu-permissive：DSU booted 标记有效，已为 PID 1 注入 permissive bootconfig\n");
 		} else {
 			slot->decision = INJECTION_DISABLED;

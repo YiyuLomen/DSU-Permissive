@@ -39,6 +39,7 @@ if tools/build.sh --target android11-5.4 >/dev/null 2>&1; then
 fi
 python3 tests/make-test-init-boot.py --help >/dev/null
 python3 tests/test-avb-header-range.py
+python3 tests/test-dm-ioctl-bypass.py
 python3 tests/test-bootconfig-parser.py
 python3 tests/test-enforcement-flow.py
 python3 tests/test-unified-config.py

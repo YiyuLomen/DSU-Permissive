@@ -15,6 +15,7 @@
 - Android 17 DSU `IsGsiRunning()` 与 booted 标记生命周期：<https://android.googlesource.com/platform/system/gsid/+/refs/heads/android17-release/libgsi.cpp>
 - DSU 映射后写入 booted 标记：<https://android.googlesource.com/platform/system/core/+/refs/heads/android16-release/init/first_stage_mount.cpp>
 - Android 16 6.12 `vfs_read`：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/fs/read_write.c>
+- Android 15 6.6 device-mapper ioctl / `table_load()`：<https://android.googlesource.com/kernel/common/+/refs/heads/android15-6.6/drivers/md/dm-ioctl.c>
 - Android 16 6.12 默认块设备 fops：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/block/fops.c>
 - Android 16 6.12 `__fput()` / `fops_put()` 生命周期：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/fs/file_table.c>
 - Android 16 6.12 procfs fops：<https://android.googlesource.com/kernel/common/+/refs/heads/android16-6.12/fs/proc/inode.c>

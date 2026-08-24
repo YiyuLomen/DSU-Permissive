@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-目标是在 DSU 已经完成映射后完成两件事：先在 first-stage 的 AVB 复验窗口内，只向 PID 1 临时呈现 `androidboot.verifiedbootstate=orange` 与带 `VERIFICATION_DISABLED` 标志的顶层 vbmeta；再在 SELinux enforcement 尚未由 init 最终确定的窗口内，优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不写磁盘 vbmeta，不持久化 verified boot 状态，不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
+目标是在 DSU 已经完成映射后完成三件事：先在 first-stage 的 AVB 复验窗口内，只向 PID 1 临时呈现 `androidboot.verifiedbootstate=orange` 与带 `HASHTREE_DISABLED` 标志的顶层 vbmeta；该 flag 保留链式 vbmeta 的加载，同时让同一 AVB handle 的 Hashtree 全部跳过。然后在 `/dev/device-mapper` 的 `DM_DEV_CREATE`/`DM_TABLE_LOAD` 协议层记录 `*_gsi` 的实际设备号与扇区数；若厂商仍尝试为这些 GSI 映射加载单 target `verity` table，则在调用内核 dm target 前把它改为同容量 `linear` table，避免无 footer 镜像落入厂商内置 hash/FEC fallback。进入 `selinux_setup` 后再同步呈现 `androidboot.veritymode=disabled`，避免 vivo `vfcheck` 仍按 `eio` 模式探测关键文件；同时优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不写磁盘 vbmeta，不持久化 verified boot/verity 状态，不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
 
 模块只支持 arm64 GKI，以及 `android12-5.10`、`android13-5.10`、`android13-5.15`、`android14-5.15`、`android14-6.1`、`android15-6.6`、`android16-6.12` 七个 DDK target。对应的 AOSP Android 12 至 Android 16 init 均在加载 policy 后调用 `SelinuxSetEnforcement()`，并通过 fs_mgr 读取 cmdline/bootconfig；fs_mgr 对重复 bootconfig 键采用第一项。Android 11 及以下和非 GKI 内核不在支持范围内。
 
@@ -23,7 +23,7 @@ avb_intercept=0|1
 
 `dsuinit` 位于 first-stage init 之前，因而在加载 KO 前以普通用户空间 syscall 打开配置。配置严格限制为两行、固定键序和 `0|1` 值；读取前必须 unlink 成功，随后通过仍打开的 FD 读取，并在传给 `finit_module()` 后关闭。ramdisk 条目权限是 `0600`，模块参数权限为 `0000`，不创建 sysfs 可读节点。进入 `/init.next` 之前没有配置文件路径可供后续程序打开。离线 root/recovery 仍能读取 raw boot 镜像，这是镜像本身的信任边界。
 
-厂商 GKI 对外部 LKM 的符号策略不能只由 DDK 编译判断：已观察到 `filp_open` 未导出、`dentry_open` 位于仅供文件系统实现使用的内部命名空间、`kernel_read` 被标记为 protected symbol。为避免 KO 在 PID 1 first-stage 加载时直接失败，模块不导入 `filp_open`、`dentry_open`、`kernel_read` 或 `filp_close`，只从 `finit_module()` 接收两个布尔参数。`selinux_intercept=0` 禁用 bootconfig 注入与 enforce 切换；`avb_intercept=0` 让 vbmeta 代理始终透传原始读取结果。未指定修补器参数时两项均为 `1`。
+厂商 GKI 对外部 LKM 的符号策略不能只由 DDK 编译判断：已观察到 `filp_open` 未导出、`dentry_open` 位于仅供文件系统实现使用的内部命名空间、`kernel_read` 被标记为 protected symbol。为避免 KO 在 PID 1 first-stage 加载时直接失败，模块不导入 `filp_open`、`dentry_open`、`kernel_read` 或 `filp_close`，只从 `finit_module()` 接收两个布尔参数。`selinux_intercept=0` 禁用 permissive bootconfig 注入与 enforce 切换；`avb_intercept=0` 让 vbmeta 代理始终透传原始读取结果，并且不注入 orange 或 `veritymode=disabled`。未指定修补器参数时两项均为 `1`。
 
 模块仍通过 `kern_path()` 检查 DSU 标记并解析 vbmeta by-name 路径，因此同时声明 `ANDROID_GKI_VFS_EXPORT_ONLY` 与 `VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver` 两个独立的 import namespace。部分厂商 6.6 GKI 会对 `kern_path` 强制校验后一个 namespace；缺失时 `finit_module()` 会以 `EINVAL` 失败并记录 `Unknown symbol kern_path (err -22)`。
 
@@ -36,13 +36,16 @@ WAIT_SYSTEM_INIT
   │ 后台解析 by-name/vbmeta[_a|_b] 的块设备 dev_t
   │ PID 1 读取目标块设备，且 DSU booted 标记存在
   │ avb_enforce 不存在时，对 PID 1 的 bootconfig 临时注入 orange
-  │ 仅修改 vbmeta 返回缓冲区的 flags
+  │ 仅修改 vbmeta 返回缓冲区的 HASHTREE_DISABLED flag
+  │ 截获 PID 1 的 device-mapper ioctl，记录 *_gsi 映射设备号和容量
+  │ 仅将以已记录 GSI 为数据设备的单 target verity table 改为 linear
   │ 磁盘内容与其他进程视图保持不变
   │ PID 1 第一次 exec /system/bin/init
   ▼
 SELINUX_SETUP_ARMED
   │ PID 1 读取 procfs 根目录的 bootconfig
-  │ DSU booted 标记存在时，仅对该 file 注入前缀
+  │ vbmeta 返回视图实际修改成功时同步注入 veritymode=disabled
+  │ SELinux 拦截生效时注入 selinux=permissive
   │ selinux_setup 窗口内后续读取同样处理
   │ PID 1 读取 selinuxfs 根目录的 enforce
   │ 通过原始 enforce write fop 执行一次 permissive
@@ -93,11 +96,25 @@ AOSP `libfs_avb` 通过 `pread64(offset=0)` 读取顶层 vbmeta。支持的 GKI 
 - 返回缓冲区开头是 `AVB0`；
 - 实际返回区间包含 flags 的目标字节。
 
-`AvbVBMetaImageHeader.flags` 位于 `[120,124)`，序列化时使用网络字节序。`AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED` 是 `1 << 1`，因此代理只对绝对偏移 `123` 的原字节执行 `OR 0x02`。例如 `0x80000001` 变为 `0x80000003`，其他位不会被覆盖。修改发生在用户读取缓冲区，磁盘分区、页缓存中的源数据和其他进程视图均不改变。
+`AvbVBMetaImageHeader.flags` 位于 `[120,124)`，序列化时使用网络字节序。`AVB_VBMETA_IMAGE_FLAGS_HASHTREE_DISABLED` 是 `1 << 0`，因此代理只对绝对偏移 `123` 的原字节执行 `OR 0x01`。例如 `0x80000002` 变为 `0x80000003`，其他位不会被覆盖。修改发生在用户读取缓冲区，磁盘分区、页缓存中的源数据和其他进程视图均不改变。
 
-修改 flags 会使 vbmeta 的签名或 bootloader 提供的摘要不再匹配。first-stage 中，bootconfig 代理会在 PID 1 读取 `/proc/bootconfig` 时把 `androidboot.verifiedbootstate = "orange"` 放在原始条目之前；AOSP `fs_mgr` 对重复键取首项，因而 `IsDeviceUnlocked()` 会允许验证错误，并继续把修改后的顶层 header 识别为 `VerificationDisabled`。代理只在 `WAIT_SYSTEM_INIT` 阶段选择这个前缀，首次 exec `/system/bin/init` 后的 SELinux 视图不含该键，second-stage 读取的仍是 bootloader 原始状态。若 `avb_enforce` 存在，则不注入 orange、不修改 vbmeta 并记录错误，避免在强制验证模式下把启动变成硬失败。
+修改 flags 会使 vbmeta 的签名或 bootloader 提供的摘要不再匹配。first-stage 中，bootconfig 代理会在 PID 1 读取 `/proc/bootconfig` 时把 `androidboot.verifiedbootstate = "orange"` 放在原始条目之前；AOSP `fs_mgr` 对重复键取首项，因而 `IsDeviceUnlocked()` 会允许验证错误，并继续把修改后的顶层 header 识别为 `HashtreeDisabled`。该状态不会让 libavb 提前丢弃链式 vbmeta，因而可继续得到 vendor/odm descriptor；随后 fs_mgr 对同一 AVB handle 的所有 Hashtree 都跳过。代理只在 `WAIT_SYSTEM_INIT` 阶段选择这个前缀，首次 exec `/system/bin/init` 后的 SELinux 视图不含该键，second-stage 读取的仍是 bootloader 原始状态。若 `avb_enforce` 存在，则不注入 orange、不修改 vbmeta 并记录错误，避免在强制验证模式下把启动变成硬失败。
 
-顶层状态为 `VerificationDisabled` 后，同一个 `AvbHandle` 管理的分区都会跳过 Hashtree，包括本次 DSU 启动涉及的宿主 vendor、odm 等条目，不仅是 DSU system。该影响仅存在于本次 first-stage 的内存视图，正常启动仍使用磁盘上的真实 vbmeta。
+顶层状态为 `HashtreeDisabled` 后，同一个 `AvbHandle` 管理的分区都会跳过 Hashtree，同时保留链式 vbmeta descriptor，包括本次 DSU 启动涉及的宿主 vendor、odm 等条目，不仅是 DSU system。该影响仅存在于本次 first-stage 的内存视图，正常启动仍使用磁盘上的真实 vbmeta。
+
+## 无 footer GSI 的 device-mapper 兜底
+
+部分厂商 init 在 GSI system 没有独立 AVB footer 时，不会因顶层 `HashtreeDisabled` 直接挂载，而是从自带 fstab/参数构造 `verity` table。vivo 样本中这张表假设的 hash/FEC 设备容量大于 `system_gsi`，内核在 `DM_TABLE_LOAD` 返回 `Hash device is too small (-E2BIG)`，随后 PID 1 因 `/system` 无法挂载退出。
+
+`dm_ioctl_proxy` 不调用未导出的 dm 内核函数。它优先在 PID 1 first-stage 的 device-mapper `dm_ctl_ioctl` 实际 `unlocked_ioctl` 入口挂接 file-operation 代理；若该静态符号不可被 kprobe 解析，才在 `vfs_ioctl` 入口按稳定的 `DM_IOCTL` UAPI magic 回退识别。代理在正常 ioctl 上下文中只负责记录 `DM_DEV_CREATE` 结果和布置 first-stage 策略；随后在 dm core 的 `table_load(file, param, param_size)` 入口处理已经复制到内核的表参数：
+
+- `DM_DEV_CREATE` 成功返回后，记录名称以 `_gsi` 结尾且不等于 `userdata_gsi` 的映射设备号；
+- 该映射的 `DM_TABLE_LOAD` 的内核 `param_size` 提供实际表末端扇区数，记录为可用容量；这一步同时按名称和 `dm_ioctl.dev` 的 `huge_encode_dev()` 值关联，因为厂商/平台 libdm 可用 `dev` 而非 `name` 选择已有映射；
+- DSU active、`avb_intercept=1`、不存在 `avb_enforce` 时，解析后续单 target `verity` table 的 data-device token；只有它指向已记录的 `*_gsi` 时才把内核参数缓冲区内的 target type 和参数改为 `linear <same-device> 0`，并把 target length 改为记录的真实容量。
+
+这里不能用 `param->data_size` 作为 target payload 边界：Android 15 / Linux 6.6 的 `ctl_ioctl()` 在调用 `table_load()` 前会把它复位为 `offsetof(struct dm_ioctl, data)`。模块使用第三参数 `param_size`；因此也不再从 fops proxy 对同一用户指针进行第二次 `copy_from_user()`。这规避了 vivo first-stage fallback 请求可被 dm core 正常处理、但额外 header 读取失败的路径。
+
+因此规则同时覆盖 `/dev/block/dm-N`、`/dev/mapper/<name>`、`/dev/block/mapper/<name>` 与 `major:minor` 四种 libdm data-device 表示；不命中、多个 target、非零 start、非 DSU、非 PID 1、second-stage、`avb_enforce` 或非 GSI backing 均原样透传。
 
 ## exec 门控
 
@@ -140,18 +157,23 @@ androidboot.verifiedbootstate = "orange"\n
 <原始 /proc/bootconfig 内容>
 ```
 
-在 `SELINUX_SETUP_ARMED`，仅当 SELinux 拦截开启时，注入视图为：
+在 `SELINUX_SETUP_ARMED`，AVB 与 SELinux 两个开关分别选择前缀。两项均开启时视图为：
 
 ```text
+androidboot.veritymode = "disabled"\n
 androidboot.selinux = "permissive"\n
 <原始 /proc/bootconfig 内容>
 ```
+
+只开启 AVB 且 vbmeta 返回视图实际修改成功时仅注入 `veritymode=disabled`；只开启 SELinux 时仅注入 `selinux=permissive`。`avb_enforce` 存在或 vbmeta 代理未命中时不覆盖 `veritymode`。
 
 代理把外部位置解释为“前缀长度 + 原文件位置”。读取前缀时不推进原 procfs 的位置；读取原内容前临时减去前缀长度，返回后再恢复逻辑位置。其他进程和其他文件对象始终使用原 fops。
 
 代理 fops 的 owner 指向本模块。附加时取得模块引用，`__fput()` 在代理 `release` 返回后释放该引用，避免 file 尚未关闭时卸载模块代码。原 procfs fops 必须属于内核本体（owner 为空），否则拒绝附加。
 
 first-stage orange 视图只影响从 `/proc/bootconfig` 读取 `verifiedbootstate` 的 `fs_mgr` 调用；device tree、已存在的 `ro.boot.verifiedbootstate` 与 `/proc/cmdline` 优先级更高时不会被改变。它不修改 `androidboot.vbmeta.device_state`，也不影响 KeyMint/TEE attestation。second-stage 注销后读取到的仍是原始 bootconfig。
+
+`selinux_setup` 的 `veritymode=disabled` 视图用于让厂商 init 与已经得到的 `HashtreeDisabled` AVB handle 保持一致。静态分析的 vivo `SetupSelinux()` 只在 `veritymode=eio` 时执行 critical-file 读/xattr 探测，并在 `EIO` 时写入 `boot-survival` 后重启；`disabled` 会跳过该路径。覆盖只对这一阶段的 PID 1 file 生效，second-stage 恢复原始 bootconfig。
 
 ## selinuxfs enforce 启动期 fallback
 
@@ -199,6 +221,7 @@ fs_mgr 的 `GetBootconfigFromString()` 在首次找到目标 key 后不再覆盖
 - vbmeta by-name 路径未及时解析或目标 read 未命中：不修改任何块设备数据，`libfs_avb` 按原始结果继续。
 - `fs_mgr` 不从 `/proc/bootconfig` 读取 `verifiedbootstate`：模块无法伪装该来源；修改后的签名错误可能不被接受，因此启动不满足使用前提。
 - `/metadata/gsi/dsu/avb_enforce` 存在：拒绝修改 vbmeta 返回视图并记录错误。
+- `selinux_setup` 没有从 `/proc/bootconfig` 读取 `veritymode`：无法覆盖厂商从其他来源取得的值，vivo 兼容路径需要真机日志确认。
 - vbmeta 魔数不匹配或用户缓冲区修改失败：保留原 read 返回值、记录错误，`libfs_avb` 看到原始数据。
 - DSU booted 标记不存在：读取原 bootconfig，不注入。
 - 原始 enforce write fop 不存在或调用失败：保留原始 enforce 读值并记录错误，系统继续以原状态启动。
