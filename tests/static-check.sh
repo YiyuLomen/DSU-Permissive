@@ -21,7 +21,7 @@ if command -v shellcheck >/dev/null 2>&1; then
         tools/patch-init-boot-android.sh \
         tools/repatch-init-boot-config-android.sh
 fi
-expected_config=$'selinux_intercept=1\navb_intercept=1'
+expected_config=$'selinux_intercept=1\navb_intercept=1\nverity_table_spoof=0'
 actual_config=$(<config/dsu_permissive.conf)
 if [[ "$actual_config" != "$expected_config" ]]; then
     echo "错误：默认统一配置内容不符合预期" >&2
@@ -45,6 +45,15 @@ python3 tests/test-enforcement-flow.py
 python3 tests/test-unified-config.py
 tests/test-android-flasher-generator.sh
 make -C loader clean all
+
+# Keep every new module-parameter accessor visible to its caller in the
+# earliest host-side check.  The actual declaration is otherwise only caught
+# when a target DDK builds the kernel module.
+if ! rg -q '^#include "dsu_config\.h"$' module/dsu_permissive_main.c ||
+   ! rg -q 'dsu_config_verity_table_spoof\(\)' module/dsu_permissive_main.c; then
+    echo "错误：主模块的 dm-verity 表伪造配置声明或调用缺失" >&2
+    exit 1
+fi
 
 if llvm-readelf -l loader/dsuinit | grep -q INTERP; then
     echo "错误：dsuinit 含动态解释器" >&2

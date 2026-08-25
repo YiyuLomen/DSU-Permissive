@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-目标是在 DSU 已经完成映射后完成三件事：先在 first-stage 的 AVB 复验窗口内，只向 PID 1 临时呈现 `androidboot.verifiedbootstate=orange` 与带 `HASHTREE_DISABLED` 标志的顶层 vbmeta；该 flag 保留链式 vbmeta 的加载，同时让同一 AVB handle 的 Hashtree 全部跳过。然后在 `/dev/device-mapper` 的 `DM_DEV_CREATE`/`DM_TABLE_LOAD` 协议层记录 `*_gsi` 的实际设备号与扇区数；若厂商仍尝试为这些 GSI 映射加载单 target `verity` table，则在调用内核 dm target 前把它改为同容量 `linear` table，避免无 footer 镜像落入厂商内置 hash/FEC fallback。进入 `selinux_setup` 后再同步呈现 `androidboot.veritymode=disabled`，避免 vivo `vfcheck` 仍按 `eio` 模式探测关键文件；同时优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不写磁盘 vbmeta，不持久化 verified boot/verity 状态，不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
+目标是在 DSU 已经完成映射后完成三件事：先在 first-stage 的 AVB 复验窗口内，只向 PID 1 临时呈现 `androidboot.verifiedbootstate=orange` 与带 `HASHTREE_DISABLED` 标志的顶层 vbmeta；该 flag 保留链式 vbmeta 的加载，同时让同一 AVB handle 的 Hashtree 全部跳过。然后在 `/dev/device-mapper` 的 `DM_DEV_CREATE`/`DM_TABLE_LOAD` 协议层记录 `*_gsi` 的实际设备号与扇区数；仅在刷入时明确启用表伪造时，将 data/hash 均为同一记录 GSI 的单 target `verity` table 改为不超过 backing 的 `linear` table，不再按 hash-tree 几何尺寸猜测表是否可信。进入 `selinux_setup` 后再同步呈现 `androidboot.veritymode=disabled`，避免 vivo `vfcheck` 仍按 `eio` 模式探测关键文件；同时优先复用原厂 `androidboot.selinux=permissive` 路径，并兼容以 `ALLOW_PERMISSIVE_SELINUX=0` 编译的 `user` init。模块不写磁盘 vbmeta，不持久化 verified boot/verity 状态，不定位或直接写 `selinux_state`，也不 Hook `security_setenforce()` 或持续拦截 enforce 写入。
 
 模块只支持 arm64 GKI，以及 `android12-5.10`、`android13-5.10`、`android13-5.15`、`android14-5.15`、`android14-6.1`、`android15-6.6`、`android16-6.12` 七个 DDK target。对应的 AOSP Android 12 至 Android 16 init 均在加载 policy 后调用 `SelinuxSetEnforcement()`，并通过 fs_mgr 读取 cmdline/bootconfig；fs_mgr 对重复 bootconfig 键采用第一项。Android 11 及以下和非 GKI 内核不在支持范围内。
 
@@ -19,11 +19,12 @@
 ```text
 selinux_intercept=0|1
 avb_intercept=0|1
+verity_table_spoof=0|1
 ```
 
-`dsuinit` 位于 first-stage init 之前，因而在加载 KO 前以普通用户空间 syscall 打开配置。配置严格限制为两行、固定键序和 `0|1` 值；读取前必须 unlink 成功，随后通过仍打开的 FD 读取，并在传给 `finit_module()` 后关闭。ramdisk 条目权限是 `0600`，模块参数权限为 `0000`，不创建 sysfs 可读节点。进入 `/init.next` 之前没有配置文件路径可供后续程序打开。离线 root/recovery 仍能读取 raw boot 镜像，这是镜像本身的信任边界。
+`dsuinit` 位于 first-stage init 之前，因而在加载 KO 前以普通用户空间 syscall 打开配置。format=4 配置严格限制为三行、固定键序和 `0|1` 值；读取前必须 unlink 成功，随后通过仍打开的 FD 读取，并在传给 `finit_module()` 后关闭。为使完整替换能安全升级旧镜像，loader 仍接受旧 format=3 的两行配置，并让新开关保持默认关闭。ramdisk 条目权限是 `0600`，模块参数权限为 `0000`，不创建 sysfs 可读节点。进入 `/init.next` 之前没有配置文件路径可供后续程序打开。离线 root/recovery 仍能读取 raw boot 镜像，这是镜像本身的信任边界。
 
-厂商 GKI 对外部 LKM 的符号策略不能只由 DDK 编译判断：已观察到 `filp_open` 未导出、`dentry_open` 位于仅供文件系统实现使用的内部命名空间、`kernel_read` 被标记为 protected symbol。为避免 KO 在 PID 1 first-stage 加载时直接失败，模块不导入 `filp_open`、`dentry_open`、`kernel_read` 或 `filp_close`，只从 `finit_module()` 接收两个布尔参数。`selinux_intercept=0` 禁用 permissive bootconfig 注入与 enforce 切换；`avb_intercept=0` 让 vbmeta 代理始终透传原始读取结果，并且不注入 orange 或 `veritymode=disabled`。未指定修补器参数时两项均为 `1`。
+厂商 GKI 对外部 LKM 的符号策略不能只由 DDK 编译判断：已观察到 `filp_open` 未导出、`dentry_open` 位于仅供文件系统实现使用的内部命名空间、`kernel_read` 被标记为 protected symbol。为避免 KO 在 PID 1 first-stage 加载时直接失败，模块不导入 `filp_open`、`dentry_open`、`kernel_read` 或 `filp_close`，只从 `finit_module()` 接收三个布尔参数。`selinux_intercept=0` 禁用 permissive bootconfig 注入与 enforce 切换；`avb_intercept=0` 让 vbmeta 代理始终透传原始读取结果，并且不注入 orange 或 `veritymode=disabled`；`verity_table_spoof=1` 才会在 AVB 拦截窗口内改写匹配的 DSU verity 表。未指定修补器参数时默认值是 `1/1/0`。
 
 模块仍通过 `kern_path()` 检查 DSU 标记并解析 vbmeta by-name 路径，因此同时声明 `ANDROID_GKI_VFS_EXPORT_ONLY` 与 `VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver` 两个独立的 import namespace。部分厂商 6.6 GKI 会对 `kern_path` 强制校验后一个 namespace；缺失时 `finit_module()` 会以 `EINVAL` 失败并记录 `Unknown symbol kern_path (err -22)`。
 
@@ -38,7 +39,7 @@ WAIT_SYSTEM_INIT
   │ avb_enforce 不存在时，对 PID 1 的 bootconfig 临时注入 orange
   │ 仅修改 vbmeta 返回缓冲区的 HASHTREE_DISABLED flag
   │ 截获 PID 1 的 device-mapper ioctl，记录 *_gsi 映射设备号和容量
-  │ 仅将以已记录 GSI 为数据设备的单 target verity table 改为 linear
+  │ 仅在 verity_table_spoof=1 时，将匹配的单 target GSI verity table 改为 linear
   │ 磁盘内容与其他进程视图保持不变
   │ PID 1 第一次 exec /system/bin/init
   ▼
@@ -110,7 +111,7 @@ AOSP `libfs_avb` 通过 `pread64(offset=0)` 读取顶层 vbmeta。支持的 GKI 
 
 - `DM_DEV_CREATE` 成功返回后，记录名称以 `_gsi` 结尾且不等于 `userdata_gsi` 的映射设备号；
 - 该映射的 `DM_TABLE_LOAD` 的内核 `param_size` 提供实际表末端扇区数，记录为可用容量；这一步同时按名称和 `dm_ioctl.dev` 的 `huge_encode_dev()` 值关联，因为厂商/平台 libdm 可用 `dev` 而非 `name` 选择已有映射；
-- DSU active、`avb_intercept=1`、不存在 `avb_enforce` 时，解析后续单 target `verity` table 的 data-device token；只有它指向已记录的 `*_gsi` 时才把内核参数缓冲区内的 target type 和参数改为 `linear <same-device> 0`，并把 target length 改为记录的真实容量。
+- DSU active、`avb_intercept=1`、`verity_table_spoof=1`、不存在 `avb_enforce` 时，只解析后续单 target dm-verity v1 table 的 data/hash-device；data/hash 都指向同一已记录 `*_gsi` 才把内核参数缓冲区内的 target type 和参数改为 `linear <same-device> 0`。target length 为原长度与 backing 容量的较小值；不再以 hash-tree 末端是否落在 backing 内作为可信度判据。
 
 这里不能用 `param->data_size` 作为 target payload 边界：Android 15 / Linux 6.6 的 `ctl_ioctl()` 在调用 `table_load()` 前会把它复位为 `offsetof(struct dm_ioctl, data)`。模块使用第三参数 `param_size`；因此也不再从 fops proxy 对同一用户指针进行第二次 `copy_from_user()`。这规避了 vivo first-stage fallback 请求可被 dm core 正常处理、但额外 header 读取失败的路径。
 
@@ -214,7 +215,7 @@ fs_mgr 的 `GetBootconfigFromString()` 在首次找到目标 key 后不再覆盖
 ## 失败策略
 
 - KO 打开或加载失败：`dsuinit`记录错误并继续原 init 链。
-- 内嵌配置缺失、无法 unlink、读取失败或语法无效：loader 不传参数，模块使用默认 `1/1`，并记录错误；修补器与镜像验证器会拒绝生成或验证非严格格式的 format=3 镜像。
+- 内嵌配置缺失、无法 unlink、读取失败或语法无效：loader 不传参数，模块使用默认 `1/1/0`，并记录错误；修补器与镜像验证器会拒绝生成或验证不符合其 format 的配置。仅配置重修补拒绝把 format=3 镜像与旧 loader 静默升级到 format=4，必须完整替换新版 loader/KO。
 - KO 与设备 GKI/KMI target 不匹配：内核拒绝加载，`dsuinit`记录错误并继续原 init 链。
 - `/init.next` 执行失败：依次尝试 `/init.real` 与 `/system/bin/init`，所有失败均记录。
 - tracepoint 或 kprobe 注册失败：KO 加载失败并保留明确内核日志，系统启动仍由 loader 继续。

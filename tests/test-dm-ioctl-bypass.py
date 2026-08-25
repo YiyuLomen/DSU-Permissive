@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""固定 DSU device-mapper AVB bypass 的协议、容量与门控契约。"""
+"""固定 DSU device-mapper 表伪造的协议、容量与门控契约。"""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,10 +36,11 @@ def is_dsu_image_name(name: str) -> bool:
     return name.endswith("_gsi") and name != "userdata_gsi"
 
 
-def data_device(params: str) -> str:
+def verity_devices(params: str) -> tuple[str, str]:
     fields = params.split()
-    assert len(fields) >= 2
-    return fields[1]
+    assert len(fields) >= 3
+    assert fields[0] == "1"
+    return fields[1], fields[2]
 
 
 def matches(token: str, device: GsiDevice) -> bool:
@@ -63,6 +64,7 @@ def rewrite(
     dsu_active: bool = True,
     avb_enforced: bool = False,
     avb_intercept: bool = True,
+    verity_table_spoof: bool = False,
 ) -> tuple[str, str, int]:
     if (
         pid != 1
@@ -70,15 +72,27 @@ def rewrite(
         or not dsu_active
         or avb_enforced
         or not avb_intercept
+        or not verity_table_spoof
         or target_type != "verity"
         or start != 0
     ):
         return target_type, params, length
-    token = data_device(params)
+    try:
+        token, hash_token = verity_devices(params)
+    except AssertionError:
+        return target_type, params, length
     for device in devices:
-        if device.sectors and matches(token, device):
-            return "linear", f"{token} 0", device.sectors
+        if not device.sectors or not matches(token, device) or not matches(hash_token, device):
+            continue
+        return "linear", f"{token} 0", min(length, device.sectors)
     return target_type, params, length
+
+
+def verity_params(token: str, data_blocks: int, *, algorithm: str = "sha256") -> str:
+    return (
+        f"1 {token} {token} 4096 4096 {data_blocks} {data_blocks} "
+        f"{algorithm} deadbeef cafe"
+    )
 
 
 def main() -> None:
@@ -110,6 +124,11 @@ def main() -> None:
     assert "record_gsi_table_size(header, table_size);" in source
     assert "rewrite_verity_table(header, table_size);" in source
     assert "parameter_offset = target_offset + sizeof(*target);" in source
+    assert "static int parse_verity_devices" in source
+    assert "dsu_config_verity_table_spoof()" in source
+    assert "按刷入配置伪装为 linear" in source
+    assert "target->length = device.sectors;" not in source
+    assert "target->length = linear_target_length;" in source
     assert "跳过 first-stage verity 改写" in source
     assert "#define DM_IOCTL_HEADER_SIZE offsetof(struct dm_ioctl, data)" in source
     assert "copy_from_user(header, argument, DM_IOCTL_HEADER_SIZE)" in source
@@ -118,20 +137,29 @@ def main() -> None:
     assert is_dsu_image_name(vendor.name)
     assert not is_dsu_image_name("userdata_gsi")
 
-    built_in = (
-        "1 /dev/block/dm-16 /dev/block/dm-16 4096 4096 "
-        "2034643 2034643 sha256 deadbeef cafe"
-    )
+    built_in = verity_params("/dev/block/dm-16", 2_034_643)
     target_type, params, length = rewrite(
-        "verity", built_in, 0, 16_277_144, devices
+        "verity", built_in, 0, 16_277_144, devices, verity_table_spoof=True
     )
     assert target_type == "linear"
     assert params == "/dev/block/dm-16 0"
     assert length == system.sectors
 
+    # 开启时不再猜测 hashtree 是否可信：同一 GSI 表统一伪装。
+    axion = GsiDevice("system_gsi", huge_encode_dev(254, 15), sectors=7_651_176)
+    complete = verity_params("/dev/block/dm-15", 941_285)
+    assert rewrite(
+        "verity", complete, 0, 7_530_280, [axion], verity_table_spoof=True
+    ) == (
+        "linear",
+        "/dev/block/dm-15 0",
+        7_530_280,
+    )
+
     # 三种映射名和 major:minor 表示均可命中，不依赖固定 dm-16。
     target_type, params, length = rewrite(
-        "verity", "1 /dev/mapper/vendor_gsi x 4096", 0, 99, devices
+        "verity", verity_params("/dev/mapper/vendor_gsi", 200_000), 0,
+        vendor.sectors, devices, verity_table_spoof=True
     )
     assert (target_type, params, length) == (
         "linear",
@@ -139,7 +167,8 @@ def main() -> None:
         vendor.sectors,
     )
     target_type, params, length = rewrite(
-        "verity", "1 /dev/block/mapper/vendor_gsi x 4096", 0, 99, devices
+        "verity", verity_params("/dev/block/mapper/vendor_gsi", 200_000), 0,
+        vendor.sectors, devices, verity_table_spoof=True
     )
     assert (target_type, params, length) == (
         "linear",
@@ -147,9 +176,20 @@ def main() -> None:
         vendor.sectors,
     )
     target_type, params, length = rewrite(
-        "verity", "1 254:16 x 4096", 0, 99, devices
+        "verity", verity_params("254:16", 2_034_643), 0, system.sectors,
+        devices, verity_table_spoof=True
     )
     assert (target_type, params, length) == ("linear", "254:16 0", system.sectors)
+
+    # target 不会超过 backing 容量。
+    assert rewrite(
+        "verity", built_in, 0, system.sectors + 1, devices,
+        verity_table_spoof=True
+    ) == (
+        "linear",
+        "/dev/block/dm-16 0",
+        system.sectors,
+    )
 
     # 非 GSI backing、非 PID 1、非 first-stage、avb_enforce 与关闭开关都透传。
     for gate in (
@@ -159,9 +199,16 @@ def main() -> None:
         {"dsu_active": False},
         {"avb_enforced": True},
         {"avb_intercept": False},
+        {"verity_table_spoof": False},
         {"start": 8},
     ):
-        args = {"target_type": "verity", "params": built_in, "start": 0, "length": 42}
+        args = {
+            "target_type": "verity",
+            "params": built_in,
+            "start": 0,
+            "length": 42,
+            "verity_table_spoof": True,
+        }
         args.update(gate)
         assert rewrite(devices=devices, **args) == (
             args["target_type"],

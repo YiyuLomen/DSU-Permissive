@@ -43,6 +43,11 @@ struct dsu_gsi_device {
 	u64 sectors;
 };
 
+struct verity_layout {
+	char data_device[DM_NAME_LEN];
+	char hash_device[DM_NAME_LEN];
+};
+
 static struct dm_ioctl_slot slots[DM_IOCTL_SLOT_COUNT];
 static struct dsu_gsi_device gsi_devices[DSU_GSI_DEVICE_COUNT];
 static DEFINE_SPINLOCK(slots_lock);
@@ -107,7 +112,8 @@ static bool should_prepare_gsi_map(void)
 
 static bool should_bypass_verity(void)
 {
-	return should_prepare_gsi_map() && dsu_detect_active();
+	return should_prepare_gsi_map() && dsu_detect_active() &&
+	       dsu_config_verity_table_spoof();
 }
 
 static bool copy_dm_ioctl_header(void __user *argument, struct dm_ioctl *header)
@@ -319,19 +325,48 @@ static int first_parameter_token(const char *parameters, size_t available,
 	return 0;
 }
 
-static int parse_verity_data_device(const char *parameters, size_t available,
-				    char *device, size_t device_size)
+static int next_parameter_token(const char **parameters, size_t *available,
+				char *token, size_t token_size)
 {
-	char version[16];
 	const char *after;
 	int error;
 
-	error = first_parameter_token(parameters, available, version,
-				      sizeof(version), &after);
+	if (!parameters || !*parameters || !available)
+		return -EINVAL;
+	error = first_parameter_token(*parameters, *available, token,
+				      token_size, &after);
 	if (error)
 		return error;
-	return first_parameter_token(after, available - (after - parameters),
-				     device, device_size, NULL);
+	if (after < *parameters || after - *parameters > *available)
+		return -EINVAL;
+	*available -= after - *parameters;
+	*parameters = after;
+	return 0;
+}
+
+/* Parse dm-verity v1's data/hash device fields; optional fields are irrelevant. */
+static int parse_verity_devices(const char *parameters, size_t available,
+				struct verity_layout *layout)
+{
+	const char *cursor = parameters;
+	char version[16];
+	int error;
+
+	if (!layout)
+		return -EINVAL;
+	memset(layout, 0, sizeof(*layout));
+	error = next_parameter_token(&cursor, &available, version,
+				     sizeof(version));
+	if (error)
+		return error;
+	if (strcmp(version, "1"))
+		return -EOPNOTSUPP;
+	error = next_parameter_token(&cursor, &available, layout->data_device,
+				     sizeof(layout->data_device));
+	if (error)
+		return error;
+	return next_parameter_token(&cursor, &available, layout->hash_device,
+				    sizeof(layout->hash_device));
 }
 
 static bool device_token_matches(const char *token,
@@ -381,14 +416,16 @@ static int rewrite_verity_table(struct dm_ioctl *header, size_t table_size)
 {
 	struct dm_target_spec *target;
 	struct dsu_gsi_device device;
+	struct verity_layout layout;
 	char parameters[DM_PARAMS_COPY_SIZE];
-	char data_device[DM_NAME_LEN];
 	char linear_parameters[DM_NAME_LEN + 3];
 	char linear_type[DM_MAX_TYPE_NAME] = "linear";
 	size_t target_offset;
 	size_t parameter_offset;
 	size_t parameter_capacity;
 	size_t parameter_length;
+	u64 original_target_length;
+	u64 linear_target_length;
 	int error;
 
 	if (header->target_count != 1)
@@ -409,29 +446,37 @@ static int rewrite_verity_table(struct dm_ioctl *header, size_t table_size)
 	parameter_length = min(parameter_capacity, sizeof(parameters));
 	memcpy(parameters, (char *)header + parameter_offset, parameter_length);
 	parameters[sizeof(parameters) - 1] = '\0';
-	error = parse_verity_data_device(parameters, parameter_length, data_device,
-					 sizeof(data_device));
+	error = parse_verity_devices(parameters, parameter_length, &layout);
 	if (error)
-		return error == -EINVAL ? 0 : error;
-	if (!find_gsi_device_for_token(data_device, &device)) {
+		return error == -EINVAL || error == -ENAMETOOLONG ||
+		       error == -EOPNOTSUPP ? 0 : error;
+	if (!find_gsi_device_for_token(layout.data_device, &device) ||
+	    !device_token_matches(layout.hash_device, &device)) {
 		if (atomic_cmpxchg(&verity_miss_logged, 0, 1) == 0)
-			pr_warn("dsu-permissive：检测到 first-stage verity 表，但 data device %s 未匹配已记录的 DSU GSI 映射（GSI %lld）\n",
-				data_device, atomic64_read(&tracked_gsi_devices));
+			pr_warn("dsu-permissive：检测到 first-stage verity 表，但 data/hash device %s/%s 未共同匹配已记录的 DSU GSI 映射（GSI %lld）\n",
+				layout.data_device, layout.hash_device,
+				atomic64_read(&tracked_gsi_devices));
 		return 0;
 	}
+	original_target_length = target->length;
+	linear_target_length = device.sectors;
+	if (!linear_target_length)
+		return -EINVAL;
 	if (scnprintf(linear_parameters, sizeof(linear_parameters), "%s 0",
-		      data_device) + 1 > parameter_capacity)
+		      layout.data_device) + 1 > parameter_capacity)
 		return -ENOSPC;
 
 	memcpy((char *)header + parameter_offset, linear_parameters,
 	       strlen(linear_parameters) + 1);
-	target->length = device.sectors;
+	/* Do not expose an AVB/FEC tail beyond the DSU mapping's backing capacity. */
+	target->length = linear_target_length;
 	memcpy(target->target_type, linear_type, sizeof(linear_type));
 
 	atomic64_inc(&bypassed_verity_tables);
 	if (atomic_cmpxchg(&bypass_logged, 0, 1) == 0)
-		pr_info("dsu-permissive：已将 DSU %s 的 first-stage verity 表替换为 linear（%s，%llu sectors）\n",
-			device.name, data_device, device.sectors);
+		pr_info("dsu-permissive：DSU %s 的 first-stage verity 表已按刷入配置伪装为 linear（%s，target %llu→%llu sectors）\n",
+				device.name, layout.data_device, original_target_length,
+				linear_target_length);
 	return 1;
 }
 

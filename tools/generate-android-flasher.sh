@@ -22,7 +22,7 @@ usage() {
   tools/generate-android-flasher.sh --target auto --output <脚本>
       [--module-dir <包含各 target KO 的目录>]
       [--loader <dsuinit>] [--magiskboot <静态 arm64 magiskboot>]
-      [--selinux <0|1>] [--avb <0|1>]
+      [--selinux <0|1>] [--avb <0|1>] [--verity-table-spoof <0|1>]
 
 未指定 magiskboot 时会拉取并校验固定的官方 Magisk v30.7 静态 arm64
 magiskboot。生成结果是一个包含全部所需资源的离线 Android shell 脚本。
@@ -102,10 +102,11 @@ target=""
 output=""
 default_selinux=1
 default_avb=1
+default_verity_table_spoof=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --target|--output|--loader|--module-dir|--magiskboot|--selinux|--avb)
+        --target|--output|--loader|--module-dir|--magiskboot|--selinux|--avb|--verity-table-spoof)
             [[ $# -ge 2 && -n "${2:-}" ]] || { usage; exit 2; }
             option=$1
             value=$2
@@ -118,6 +119,7 @@ while [[ $# -gt 0 ]]; do
                 --magiskboot) magiskboot=$value ;;
                 --selinux) default_selinux=$value ;;
                 --avb) default_avb=$value ;;
+                --verity-table-spoof) default_verity_table_spoof=$value ;;
             esac
             ;;
         -h|--help)
@@ -138,6 +140,10 @@ done
 }
 case "$default_selinux" in 0|1) ;; *) fail "--selinux 只能是 0 或 1" ;; esac
 case "$default_avb" in 0|1) ;; *) fail "--avb 只能是 0 或 1" ;; esac
+case "$default_verity_table_spoof" in
+    0|1) ;;
+    *) fail "--verity-table-spoof 只能是 0 或 1" ;;
+esac
 
 bundle_mode=auto
 selected_targets=("${supported_targets[@]}")
@@ -212,6 +218,7 @@ sed \
     -e "s|@MAGISK_SOURCE@|$(escape_sed_replacement "$magisk_source")|g" \
     -e "s|@DEFAULT_SELINUX@|$default_selinux|g" \
     -e "s|@DEFAULT_AVB@|$default_avb|g" \
+    -e "s|@DEFAULT_VERITY_TABLE_SPOOF@|$default_verity_table_spoof|g" \
     -e "s|@MAGISKBOOT_SHA256@|$magiskboot_sha256|g" \
     -e "s|@LOADER_SHA256@|$loader_sha256|g" \
     -e "s|@MODULE_ANDROID12_5_10_SHA256@|$module_android12_5_10_sha256|g" \
@@ -247,5 +254,5 @@ echo "已生成完全自包含的 Android 刷写脚本：$output"
 echo "bundle mode：$bundle_mode"
 echo "targets：$bundle_targets"
 echo "magiskboot：$magisk_version（$magiskboot_sha256）"
-echo "默认配置：SELinux 拦截=$default_selinux，AVB 拦截=$default_avb"
+echo "默认配置：SELinux 拦截=$default_selinux，AVB 拦截=$default_avb，dm-verity 表伪造=$default_verity_table_spoof"
 echo "设备端会在备份和修补前按 uname -r 选择 KO；交互运行会询问是否直接刷入，非交互运行需显式传入 --flash"

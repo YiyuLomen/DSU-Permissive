@@ -8,5 +8,6 @@
 
 bool dsu_config_selinux_intercept(void);
 bool dsu_config_avb_intercept(void);
+bool dsu_config_verity_table_spoof(void);
 
 #endif

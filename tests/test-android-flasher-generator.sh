@@ -66,7 +66,7 @@ fi
 if command -v script >/dev/null 2>&1; then
     set +e
     interactive_output=$(
-        printf '\n\nn\n' |
+        printf '\n\n\nn\n' |
             script -q -e -c \
                 "sh '$auto_output' --partition '$work_dir/not-a-block-device'" \
                 /dev/null 2>&1
@@ -79,6 +79,8 @@ if command -v script >/dev/null 2>&1; then
     grep -q 'SELinux 拦截（0=关闭，1=开启，默认 1）' \
         <<<"$interactive_output"
     grep -q 'AVB 拦截（0=关闭，1=开启，默认 1）' \
+        <<<"$interactive_output"
+    grep -q 'dm-verity 表伪造（0=关闭，1=开启，默认 0）' \
         <<<"$interactive_output"
     grep -q '继续只生成备份和补丁镜像，不刷入目标分区' \
         <<<"$interactive_output"

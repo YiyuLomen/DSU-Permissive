@@ -8,6 +8,7 @@ bundle_magisk_version='@MAGISK_VERSION@'
 bundle_magisk_source='@MAGISK_SOURCE@'
 default_selinux='@DEFAULT_SELINUX@'
 default_avb='@DEFAULT_AVB@'
+default_verity_table_spoof='@DEFAULT_VERITY_TABLE_SPOOF@'
 magiskboot_sha256='@MAGISKBOOT_SHA256@'
 loader_sha256='@LOADER_SHA256@'
 module_android12_5_10_sha256='@MODULE_ANDROID12_5_10_SHA256@'
@@ -24,6 +25,7 @@ usage() {
 用法：
   sh $0 [--flash] [--partition <块设备>] [--slot current|a|b|none]
        [--backup-dir <目录>] [--selinux 0|1] [--avb 0|1]
+       [--verity-table-spoof 0|1]
        [--keep-work]
   sh $0 --verify-bundle
 
@@ -339,8 +341,10 @@ requested_slot=current
 backup_dir=/data/local/tmp/dsu-permissive-backups
 selinux_value=$default_selinux
 avb_value=$default_avb
+verity_table_spoof_value=$default_verity_table_spoof
 selinux_specified=0
 avb_specified=0
+verity_table_spoof_specified=0
 keep_work=0
 work_dir=""
 
@@ -354,7 +358,7 @@ while [ "$#" -gt 0 ]; do
             operation=verify
             shift
             ;;
-        --partition|--slot|--backup-dir|--selinux|--avb)
+        --partition|--slot|--backup-dir|--selinux|--avb|--verity-table-spoof)
             [ "$#" -ge 2 ] && [ -n "$2" ] || { usage; exit 2; }
             option=$1
             value=$2
@@ -365,6 +369,10 @@ while [ "$#" -gt 0 ]; do
                 --backup-dir) backup_dir=$value ;;
                 --selinux) selinux_value=$value; selinux_specified=1 ;;
                 --avb) avb_value=$value; avb_specified=1 ;;
+                --verity-table-spoof)
+                    verity_table_spoof_value=$value
+                    verity_table_spoof_specified=1
+                    ;;
             esac
             ;;
         --keep-work)
@@ -385,12 +393,19 @@ done
 
 case "$selinux_value" in 0|1) ;; *) fail "--selinux 只能是 0 或 1" ;; esac
 case "$avb_value" in 0|1) ;; *) fail "--avb 只能是 0 或 1" ;; esac
+case "$verity_table_spoof_value" in
+    0|1) ;;
+    *) fail "--verity-table-spoof 只能是 0 或 1" ;;
+esac
 if [ "$operation" != "verify" ] && [ -t 0 ] && [ -t 2 ]; then
     if [ "$selinux_specified" -eq 0 ]; then
         selinux_value=$(prompt_switch "SELinux 拦截" "$selinux_value")
     fi
     if [ "$avb_specified" -eq 0 ]; then
         avb_value=$(prompt_switch "AVB 拦截" "$avb_value")
+    fi
+    if [ "$verity_table_spoof_specified" -eq 0 ]; then
+        verity_table_spoof_value=$(prompt_switch "dm-verity 表伪造" "$verity_table_spoof_value")
     fi
 fi
 prompt_for_flash
@@ -499,6 +514,7 @@ MAGISKBOOT="$work_dir/assets/magiskboot" \
         --module "$work_dir/assets/dsu_permissive.ko" \
         --selinux "$selinux_value" \
         --avb "$avb_value" \
+        --verity-table-spoof "$verity_table_spoof_value" \
         --magiskboot "$work_dir/assets/magiskboot" \
         --replace-existing ||
     fail "镜像修补或内部验证失败；原分区未写入"
@@ -539,7 +555,7 @@ echo "目标分区：$partition_path"
 echo "补丁 SHA-256：$patched_sha256"
 echo "原始完整备份：$backup_image"
 echo "手动恢复命令：dd if='$backup_image' of='$partition_path' bs=4194304 && sync"
-echo "现在可以重启设备；SELinux/AVB 配置已固化在 init_boot，并会在下次启动时加载"
+echo "现在可以重启设备；SELinux/AVB/dm-verity 表伪造配置已固化在 init_boot，并会在下次启动时加载"
 
 exit 0
 

@@ -18,8 +18,8 @@ typedef unsigned long size_t;
 #define ERR_EEXIST (-17L)
 #define ERR_ENOENT (-2L)
 
-#define MODULE_CONFIG_CAPACITY 64U
-#define MODULE_PARAMS_CAPACITY 64U
+#define MODULE_CONFIG_CAPACITY 96U
+#define MODULE_PARAMS_CAPACITY 96U
 
 static int log_fd = 2;
 
@@ -122,6 +122,7 @@ static int parse_module_config(const char *buffer, size_t length,
 	size_t output = 0;
 	char selinux_value;
 	char avb_value;
+	char verity_table_value;
 
 	if (!consume_text(buffer, length, &cursor, "selinux_intercept=") ||
 	    cursor == length)
@@ -132,11 +133,29 @@ static int parse_module_config(const char *buffer, size_t length,
 	    cursor == length)
 		return 0;
 	avb_value = buffer[cursor++];
-	if ((avb_value != '0' && avb_value != '1') ||
-	    (cursor != length &&
-	     (cursor + 1 != length || buffer[cursor] != '\n')))
+	if (avb_value != '0' && avb_value != '1')
 		return 0;
 
+	/*
+	 * format=3 used two switches. Keep accepting it so a loader update can
+	 * safely replace an older image; the new verity-table mode then stays at
+	 * the module default (disabled).
+	 */
+	verity_table_value = '\0';
+	if (cursor != length) {
+		if (cursor + 1 == length && buffer[cursor] == '\n')
+			goto parsed;
+		if (!consume_text(buffer, length, &cursor,
+				  "\nverity_table_spoof=") || cursor == length)
+			return 0;
+		verity_table_value = buffer[cursor++];
+		if ((verity_table_value != '0' && verity_table_value != '1') ||
+		    (cursor != length &&
+		     (cursor + 1 != length || buffer[cursor] != '\n')))
+			return 0;
+	}
+
+parsed:
 	output = append_text(parameters, capacity - 1, output,
 			     "selinux_intercept=");
 	if (output == capacity - 1)
@@ -146,6 +165,13 @@ static int parse_module_config(const char *buffer, size_t length,
 	if (output == capacity - 1)
 		return 0;
 	parameters[output++] = avb_value;
+	if (verity_table_value) {
+		output = append_text(parameters, capacity - 1, output,
+				     " verity_table_spoof=");
+		if (output == capacity - 1)
+			return 0;
+		parameters[output++] = verity_table_value;
+	}
 	parameters[output] = '\0';
 	return 1;
 }

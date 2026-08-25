@@ -76,7 +76,8 @@ done
 
 format=$(metadata_value format "$work_dir/extract/metadata") || format=""
 project=$(metadata_value project "$work_dir/extract/metadata") || project=""
-if [[ ( "$format" != "1" && "$format" != "2" && "$format" != "3" ) ||
+if [[ ( "$format" != "1" && "$format" != "2" && "$format" != "3" &&
+      "$format" != "4" ) ||
       "$project" != "DSU-Permissive" ]]; then
     echo "错误：补丁元数据格式不受支持" >&2
     exit 1
@@ -94,7 +95,7 @@ if [[ -z "$expected_original" || "$actual_original" != "$expected_original" ||
     exit 1
 fi
 
-if [[ "$format" == "2" || "$format" == "3" ]]; then
+if [[ "$format" == "2" || "$format" == "3" || "$format" == "4" ]]; then
     if ! "$magiskboot_bin" cpio ramdisk.cpio \
         "exists dsu_permissive.conf" >/dev/null 2>&1; then
         echo "错误：format=$format 补丁缺少 /dsu_permissive.conf" >&2
@@ -117,7 +118,7 @@ fi
     "rm dsu_permissive.ko" \
     "rm dsu_permissive.meta" \
     "mv init.next init"
-if [[ "$format" == "2" || "$format" == "3" ]]; then
+if [[ "$format" == "2" || "$format" == "3" || "$format" == "4" ]]; then
     "$magiskboot_bin" cpio ramdisk.cpio "rm dsu_permissive.conf"
 fi
 "$magiskboot_bin" repack "$input" "$work_dir/candidate.img"

@@ -62,7 +62,8 @@ done
 
 format=$(metadata_value format "$work_dir/extract/metadata") || format=""
 project=$(metadata_value project "$work_dir/extract/metadata") || project=""
-if [[ ( "$format" != "1" && "$format" != "2" && "$format" != "3" ) ||
+if [[ ( "$format" != "1" && "$format" != "2" && "$format" != "3" &&
+      "$format" != "4" ) ||
       "$project" != "DSU-Permissive" ]]; then
     echo "错误：补丁元数据无效" >&2
     exit 1
@@ -87,9 +88,9 @@ case "$format" in
             echo "错误：format=1 镜像不应包含 /dsu_permissive.conf" >&2
             exit 1
         fi
-        config_status="默认参数：SELinux 拦截=1，AVB 拦截=1"
+        config_status="默认参数：SELinux 拦截=1，AVB 拦截=1，dm-verity 表伪造=0"
         ;;
-    2|3)
+    2|3|4)
         if ! "$magiskboot_bin" cpio ramdisk.cpio \
             "exists dsu_permissive.conf" >/dev/null 2>&1; then
             echo "错误：format=$format 镜像缺少 /dsu_permissive.conf" >&2
@@ -109,16 +110,34 @@ case "$format" in
             "$work_dir/extract/config")
         config_avb=$(awk -F= '$1 == "avb_intercept" { print $2 }' \
             "$work_dir/extract/config")
+        config_verity_table_spoof=$(awk -F= '$1 == "verity_table_spoof" { print $2 }' \
+            "$work_dir/extract/config")
         if [[ "$config_selinux" != "0" && "$config_selinux" != "1" ]] ||
            [[ "$config_avb" != "0" && "$config_avb" != "1" ]]; then
             echo "错误：内嵌配置内容无效" >&2
             exit 1
         fi
-        printf 'selinux_intercept=%s\navb_intercept=%s\n' \
-            "$config_selinux" "$config_avb" > "$work_dir/extract/expected-config"
+        if [[ "$format" == "4" ]]; then
+            if [[ "$config_verity_table_spoof" != "0" &&
+                  "$config_verity_table_spoof" != "1" ]]; then
+                echo "错误：内嵌 dm-verity 表伪造配置无效" >&2
+                exit 1
+            fi
+            printf 'selinux_intercept=%s\navb_intercept=%s\nverity_table_spoof=%s\n' \
+                "$config_selinux" "$config_avb" "$config_verity_table_spoof" \
+                > "$work_dir/extract/expected-config"
+        else
+            if [[ -n "$config_verity_table_spoof" ]]; then
+                echo "错误：format=$format 镜像不应包含 dm-verity 表伪造配置" >&2
+                exit 1
+            fi
+            printf 'selinux_intercept=%s\navb_intercept=%s\n' \
+                "$config_selinux" "$config_avb" \
+                > "$work_dir/extract/expected-config"
+        fi
         if ! cmp -s "$work_dir/extract/config" \
             "$work_dir/extract/expected-config"; then
-            echo "错误：内嵌配置必须为严格的两行格式" >&2
+            echo "错误：内嵌配置不符合对应镜像格式的严格行序" >&2
             exit 1
         fi
         config_status=$(tr '\n' ' ' < "$work_dir/extract/config")

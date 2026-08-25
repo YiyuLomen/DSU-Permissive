@@ -1,6 +1,6 @@
 # DSU-Permissive
 
-DSU-Permissive 面向 arm64 GKI，支持 `android12-5.10`、`android13-5.10`、`android13-5.15`、`android14-5.15`、`android14-6.1`、`android15-6.6` 与 `android16-6.12` 七个 DDK target。SELinux 与 AVB 拦截配置在修补时写入 `init_boot` ramdisk，默认两项均开启；启动器在加载 KO 前读取并立即删除配置文件，再将结果作为模块参数传入。在 PID 1 的 first-stage 确认当前系统确实是 DSU 后，AVB 拦截会临时让 `libfs_avb` 从 `/proc/bootconfig` 读取到 `verifiedbootstate=orange`，并只修改该进程的顶层 vbmeta 读取视图，将顶层 `HASHTREE_DISABLED` flag（bit 0）临时打开，使链式 vbmeta 仍能被加载、但本次 DSU 启动跳过所有 Hashtree。对于没有 AVB footer、厂商 init 又回退创建内置 `verity` table 的 GSI，模块还会仅在同一 first-stage 截获 PID 1 的 `/dev/device-mapper` 协议：记录 `*_gsi` 映射的真实容量，并将以该映射为数据设备的单 target `verity` table 改写为同容量 `linear` table。因而 `system_gsi`、`vendor_gsi`、`product_gsi` 等 GSI 映像分区不依赖 footer 或厂商内置 hash/FEC 参数；`userdata_gsi` 不在此范围。确认 vbmeta 返回视图实际修改成功后，进入 `selinux_setup` 还会让 PID 1 临时读取到 `veritymode=disabled`，使 vivo 等厂商 init 的完整性检查状态与 AVB disabled 视图一致。随后优先让原厂 init 读取到临时的：
+DSU-Permissive 面向 arm64 GKI，支持 `android12-5.10`、`android13-5.10`、`android13-5.15`、`android14-5.15`、`android14-6.1`、`android15-6.6` 与 `android16-6.12` 七个 DDK target。SELinux、AVB 与 dm-verity 表伪造配置在修补时写入 `init_boot` ramdisk；前两项默认开启，表伪造默认关闭。启动器在加载 KO 前读取并立即删除配置文件，再将结果作为模块参数传入。在 PID 1 的 first-stage 确认当前系统确实是 DSU 后，AVB 拦截会临时让 `libfs_avb` 从 `/proc/bootconfig` 读取到 `verifiedbootstate=orange`，并只修改该进程的顶层 vbmeta 读取视图，将顶层 `HASHTREE_DISABLED` flag（bit 0）临时打开，使链式 vbmeta 仍能被加载、但本次 DSU 启动跳过所有 Hashtree。若显式开启表伪造，模块会在同一 first-stage 截获 PID 1 的 `/dev/device-mapper` 协议：对 data/hash 均为同一已记录 `*_gsi` 映射的单 target `verity` table，统一改为不超过该映射容量的 `linear` table；不以表尺寸猜测其 hash tree 是否可信。宿主分区和 `userdata_gsi` 不在此范围。确认 vbmeta 返回视图实际修改成功后，进入 `selinux_setup` 还会让 PID 1 临时读取到 `veritymode=disabled`，使 vivo 等厂商 init 的完整性检查状态与 AVB disabled 视图一致。随后优先让原厂 init 读取到临时的：
 
 ```text
 androidboot.selinux = "permissive"
@@ -22,7 +22,7 @@ androidboot.selinux = "permissive"
   → 仅返回缓冲区中的 flags 被临时 OR 0x01
   → libfs_avb 保留链式 vbmeta，并以 HashtreeDisabled 跳过该 AVB handle 的 Hashtree
   → PID 1 创建 *_gsi device-mapper 映射并记录真实扇区数
-  → 若厂商仍为该 GSI 加载 verity table，则临时改为同容量 linear table
+  → 若刷入时开启表伪造，将匹配的 DSU GSI verity table 统一改为 linear
   → /system/bin/init selinux_setup
   → 仅 PID 1 看到 veritymode=disabled 与可选的 permissive 前缀
   → 允许 permissive 的 init 调用 security_setenforce(false)
@@ -45,7 +45,7 @@ first-stage init 会在每次判断 DSU 前删除旧标记，因此正常启动�
 
 ## 统一配置
 
-修补器将如下严格两行配置写入 ramdisk：
+修补器将如下严格三行配置写入 ramdisk：
 
 ```text
 /dsu_permissive.conf
@@ -56,16 +56,18 @@ first-stage init 会在每次判断 DSU 前删除旧标记，因此正常启动�
 ```text
 selinux_intercept=1
 avb_intercept=1
+verity_table_spoof=0
 ```
 
-两个键必须各出现一次，值只能是 `0` 或 `1`：
+三个键必须各出现一次，值只能是 `0` 或 `1`：
 
 | 配置 | `1` | `0` |
 | --- | --- | --- |
 | `selinux_intercept` | 允许 bootconfig 注入与 selinuxfs/enforce 启动期切换 | 不注入 bootconfig，也不执行 permissive 切换 |
-| `avb_intercept` | 修改 first-stage vbmeta 返回视图；必要时将 GSI 的 first-stage verity table 改为 linear；实际修改成功后在 selinux_setup 同步 `veritymode=disabled` | 始终透传原始 vbmeta/DM table 数据且不覆盖 `veritymode` |
+| `avb_intercept` | 修改 first-stage vbmeta 返回视图；实际修改成功后在 selinux_setup 同步 `veritymode=disabled` | 始终透传原始 vbmeta/DM table 数据且不覆盖 `veritymode` |
+| `verity_table_spoof` | 在 `avb_intercept=1` 时，统一将匹配的 DSU GSI first-stage `verity` 表伪装为 `linear` | 所有 dm-verity 表原样透传 |
 
-两项可以任意组合。`--selinux 0|1` 和 `--avb 0|1` 可显式指定；未提供参数时默认为 `1/1`，交互终端只会询问未指定的项。KO 不读取任何配置文件，因此不会导入厂商 GKI 可能拒绝的 `dentry_open()`、`kernel_read()` 等符号。模块参数不创建 sysfs 可读节点。
+三项可以显式指定：`--selinux 0|1`、`--avb 0|1`、`--verity-table-spoof 0|1`。默认值为 `1/1/0`，交互终端只会询问未指定的项。表伪造依赖 AVB 拦截；`--avb 0` 时即使填写 `--verity-table-spoof 1` 也不会改写表。KO 不读取任何配置文件，因此不会导入厂商 GKI 可能拒绝的 `dentry_open()`、`kernel_read()` 等符号。模块参数不创建 sysfs 可读节点。
 
 `/dsu_permissive.conf` 在 ramdisk 中的权限为 `0600`。`dsuinit` 以 `O_NOFOLLOW|O_CLOEXEC` 打开它后必须先 unlink 成功才读取；读取后立即关闭 FD。因此，进入后续 init 链的其他程序没有可打开的配置路径。raw `boot/init_boot` 镜像仍可被拥有离线 root/recovery 权限的一方提取，这不是运行时文件权限能够防止的。更改开关需要重新修补镜像；已修补镜像可用 `repatch-init-boot-config-android.sh` 仅替换配置并保留 loader、KO 和原 init。
 
@@ -130,7 +132,7 @@ tools/patch-init-boot.sh \
   --output /path/to/dsu-permissive-boot-or-init_boot.img \
   --loader out/dsuinit \
   --module out/dsu_permissive-android15-6.6.ko \
-  --selinux 1 --avb 1
+  --selinux 1 --avb 1 --verity-table-spoof 1
 ```
 
 ### 在 Android 上修补
@@ -144,10 +146,10 @@ MAGISKBOOT=/path/to/magiskboot sh ./patch-init-boot-android.sh \
   --output ./init_boot_dsu_patched.img \
   --loader ./dsuinit \
   --module ./dsu_permissive.ko \
-  --selinux 1 --avb 0
+  --selinux 1 --avb 1 --verity-table-spoof 1
 ```
 
-脚本会在设备本地完成解包、条目冲突检查、SHA-256 元数据生成、重打包和再次解包校验；不会刷写分区，也不会覆盖输入或已有输出。若交互运行，未指定的 SELinux/AVB 参数会逐项询问；非交互运行采用默认 `1/1`。Android 端脚本不具备主机 LLVM 工具链，建议复制到设备前先运行 `tools/verify-artifacts.sh` 检查 loader/KO。
+脚本会在设备本地完成解包、条目冲突检查、SHA-256 元数据生成、重打包和再次解包校验；不会刷写分区，也不会覆盖输入或已有输出。若交互运行，未指定的 SELinux/AVB/dm-verity 表伪造参数会逐项询问；非交互运行采用默认 `1/1/0`。Android 端脚本不具备主机 LLVM 工具链，建议复制到设备前先运行 `tools/verify-artifacts.sh` 检查 loader/KO。
 
 只变更开关而不替换 loader/KO 时：
 
@@ -155,7 +157,7 @@ MAGISKBOOT=/path/to/magiskboot sh ./patch-init-boot-android.sh \
 MAGISKBOOT=/path/to/magiskboot sh ./repatch-init-boot-config-android.sh \
   --input ./init_boot_dsu_patched.img \
   --output ./init_boot_dsu_reconfigured.img \
-  --selinux 0 --avb 1
+  --selinux 0 --avb 1 --verity-table-spoof 1
 ```
 
 [`tools/fetch-static-magiskboot.sh`](tools/fetch-static-magiskboot.sh) 会从官方 Magisk v30.7 APK 提取并验证 arm64 静态 magiskboot。`tools/build.sh` 将其输出到 `out/magiskboot-arm64`，可与 Android 修补脚本及其他产物分别复制到设备。
@@ -192,12 +194,12 @@ tools/unpatch-init-boot.sh \
 - 每个 GKI target 必须使用各自构建的 KO；即使内核主次版本相同，也不能在不同 Android KMI 世代之间复用模块。
 - 自动识别 KMI 的单文件刷写脚本只在 `tools/build.sh --all` 时生成，单 target 构建不会生成绑定单一 KMI 的刷写脚本。
 - 设备内核必须启用模块与 kprobe，并允许加载对应签名策略下的 KO；启用 SELinux 拦截时还要求 `CONFIG_SECURITY_SELINUX_DEVELOP`。
-- AVB 拦截开启时，模块在 DSU first-stage 暂时向 PID 1 提供 `verifiedbootstate=orange`，并在 `selinux_setup` 窗口同步提供 `veritymode=disabled`；对 `*_gsi` 映射创建的 first-stage `verity` table，会在真正加载前改为 `linear`。若存在 `/metadata/gsi/dsu/avb_enforce`，两项都不注入，也不修改 vbmeta 或 device-mapper table。
+- AVB 拦截开启时，模块在 DSU first-stage 暂时向 PID 1 提供 `verifiedbootstate=orange`，并在 `selinux_setup` 窗口同步提供 `veritymode=disabled`。只有同时启用 `verity_table_spoof=1` 时，才将 data/hash 均命中同一已记录 `*_gsi` 的单 target first-stage `verity` table 改为 `linear`；长度不超过 backing 容量。若存在 `/metadata/gsi/dsu/avb_enforce`，三项作用均不触发表改写或 vbmeta 修改。
 - 模块不会绕过 bootloader 对 `boot`、`init_boot` 或磁盘 vbmeta 的校验，也不会写入、签名或持久修改 vbmeta。顶层 vbmeta 修改只存在于 DSU first-stage PID 1 的单次读取返回缓冲区；无 footer GSI 的兼容改写只存在于该 PID 1 发出的单次 device-mapper `table_load()` 内核参数副本中。
 - 若设备从 device tree、已初始化的 `ro.boot.verifiedbootstate` 或 `/proc/cmdline` 而非 `/proc/bootconfig` 取得状态，此版本不能改变该来源；KeyMint/TEE attestation 同样不受影响。
 - `veritymode=disabled` 只存在于 DSU 的 `selinux_setup` PID 1 读取视图，用于跳过 vivo `vfcheck` 的 `eio` 探测；不会修改 bootloader bootconfig、磁盘分区或 second-stage 的 `ro.boot.veritymode`。
 - 顶层 `HASHTREE_DISABLED` 会让本次 DSU 启动中由同一个 AVB handle 管理的 system、vendor、odm 等分区跳过 Hashtree，同时保留链式 vbmeta descriptor；正常启动仍读取磁盘原始 vbmeta。
-- 无论 GSI 是否含 AVB footer，只要厂商 first-stage 通过 `/dev/device-mapper` 加载一个以已记录 `*_gsi` 映射为数据设备的单 target `verity` table，模块都会使用记录到的实际映射容量将它改为 `linear`。该规则仅限 PID 1、DSU 已 active、first-stage、`avb_intercept=1` 且不存在 `avb_enforce`；不会改写宿主 `system_a`、`vendor_a` 等非 GSI 映射。
+- 开启表伪造后，对以已记录 `*_gsi` 映射为同一 data/hash 设备的单 target dm-verity v1 表，模块统一改为 `linear <same-device> 0`，并将 target 长度限制为原长度与 backing 容量的较小值；不再从 hash-tree 几何尺寸推断表是否可信。规则仅限 PID 1、DSU 已 active、first-stage、`avb_intercept=1`、`verity_table_spoof=1` 且不存在 `avb_enforce`；不会改写宿主 `system_a`、`vendor_a` 等非 GSI 映射或 `userdata_gsi`。
 - 启动期 enforce fallback 只执行一次；second-stage 后模块不会阻止手动或系统主动切回 Enforcing。
 - 产物检查会拒绝导入 `filp_open` / `dentry_open` / `kernel_read` / `filp_close` 文件读取链，以及设备 GKI 签名保护不允许的 `kernel_write` / `vfs_fsync` 系列符号。
 - DDK 的通用 KMI 构建成功不等同于所有同版本厂商 GKI 都可运行，真机前必须核对 vermagic、符号与模块签名要求。

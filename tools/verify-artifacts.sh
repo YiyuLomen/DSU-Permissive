@@ -66,8 +66,9 @@ if ! grep -q 'dsu_config_path=/dsu_permissive.conf' \
     exit 1
 fi
 if ! grep -q 'parm=selinux_intercept:' <<<"$module_modinfo" ||
-   ! grep -q 'parm=avb_intercept:' <<<"$module_modinfo"; then
-    echo "错误：内核模块缺少 SELinux/AVB 模块参数声明" >&2
+   ! grep -q 'parm=avb_intercept:' <<<"$module_modinfo" ||
+   ! grep -q 'parm=verity_table_spoof:' <<<"$module_modinfo"; then
+    echo "错误：内核模块缺少 SELinux/AVB/dm-verity 表伪造参数声明" >&2
     exit 1
 fi
 if ! grep -q 'dsu_ddk_target=' <<<"$module_modinfo"; then

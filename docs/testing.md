@@ -20,17 +20,17 @@ MODULE_UNDER_TEST=out/dsu_permissive-android15-6.6.ko \
 
 - AArch64 freestanding loader 构建；
 - loader 无 `PT_INTERP`、无动态依赖、无未解析符号；
-- `init_boot` 内嵌配置两个键的四种组合、严格两行格式、默认 `1/1`、模块参数传递，以及 Android 重修补配置往返；
+- `init_boot` 内嵌配置三个键的八种组合、format=4 严格三行格式、默认 `1/1/0`、模块参数传递，以及 Android 重修补配置往返；
 - AVB header `AVB0`、flags `[120,124)` 与目标字节 123 的偏移契约；
 - `0x80000002 → 0x80000003`、已含 `0x01` 时幂等，以及分片读取边界；
 - 非 PID 1、非 WAIT 阶段、非 DSU、非目标设备、`avb_enforce` 与错误魔数均不修改；
 - “磁盘”输入字节保持不变，只修改返回缓冲区副本；
-- device-mapper 协议：读取 `DM_DEV_CREATE` 返回 ioctl 固定头时必须使用 `offsetof(struct dm_ioctl, data)`，与 dm core 的 `minimum_data_size` 一致，不能读取 `sizeof(struct dm_ioctl)` 包含的尾部 padding；`DM_DEV_CREATE` 返回的 `dm_ioctl.dev` 必须先经 `huge_decode_dev()` 还原为真实 `major:minor`，再记录 `*_gsi` 的设备号；`DM_TABLE_LOAD` 必须在 dm core `table_load()` 收到的内核参数中以第三参数 `param_size` 校验全部 target（不能使用已被 dm core 复位的 `param->data_size`，也不从用户指针二次复制）；不采用任意固定 target 上限；只把以该设备为 data-device 的 single-target `verity` 表改为等容量 `linear` 表；`userdata_gsi`、非 GSI backing、非 PID 1、非 first-stage、非 DSU、`avb_enforce` 和关闭 AVB 开关均透传；
+- device-mapper 协议：读取 `DM_DEV_CREATE` 返回 ioctl 固定头时必须使用 `offsetof(struct dm_ioctl, data)`，与 dm core 的 `minimum_data_size` 一致，不能读取 `sizeof(struct dm_ioctl)` 包含的尾部 padding；`DM_DEV_CREATE` 返回的 `dm_ioctl.dev` 必须先经 `huge_decode_dev()` 还原为真实 `major:minor`，再记录 `*_gsi` 的设备号；`DM_TABLE_LOAD` 必须在 dm core `table_load()` 收到的内核参数中以第三参数 `param_size` 校验全部 target（不能使用已被 dm core 复位的 `param->data_size`，也不从用户指针二次复制）；不采用任意固定 target 上限；仅在 `verity_table_spoof=1` 时，data/hash 都指向同一记录 GSI 的 single-target dm-verity v1 表才改为不超过 backing 的 `linear`；`userdata_gsi`、非 GSI backing、非 PID 1、非 first-stage、非 DSU、`avb_enforce`、关闭 AVB 或关闭表伪造均透传；
 - AOSP bootconfig 首项优先契约，以及 first-stage orange、selinux_setup `veritymode=disabled` 与 permissive 组合视图；
 - AVB 拦截未关闭、DSU active 且不存在 `avb_enforce` 时，first-stage 临时覆盖 `androidboot.verifiedbootstate`；仅在 vbmeta 返回视图实际修改成功后，selinux_setup 临时覆盖 `androidboot.veritymode`；second-stage 恢复完整原始视图；
 - `user` / `userdebug` init 的 enforce fallback 状态矩阵；
 - KO 必须分别声明 Android GKI VFS 与 `kern_path` 内部 VFS namespace；不得导入 `filp_open` / `dentry_open` / `kernel_read` / `filp_close` 文件读取链，也不得导入目标设备拒绝的 `kernel_write` / `vfs_fsync` 系列符号；
-- 主机 Bash 与 Android `/system/bin/sh` 两套脚本生成相同 `format=3` 镜像元数据布局，Android 脚本还覆盖旧补丁哈希校验、逻辑还原、loader/KO 替换与仅配置重修补往返；
+- 主机 Bash 与 Android `/system/bin/sh` 两套脚本生成相同 `format=4` 镜像元数据布局，Android 脚本还覆盖旧补丁哈希校验、逻辑还原、loader/KO 替换与仅配置重修补往返；
 - 单文件 Android 刷写生成器覆盖自动 KMI bundle 的资源哈希、自校验和 target 选择；不要求构建单一 KMI 绑定的刷写产物；
 - 可代表 Android 12 `boot.img` 或 Android 13 及以上 `init_boot.img` 的最小 boot header v4 镜像往返；
 - KernelSU 的 `/init.real` 与 `/kernelsu.ko` 在往返后哈希不变。
@@ -107,7 +107,7 @@ dsu-permissive：已为 PID 1 临时呈现 hashtree-disabled vbmeta
 init: [libfs_avb] Failed to verify vbmeta digest
 init: [libfs_avb] Returning avb_handle with status: HashtreeDisabled
 init: Top-level vbmeta hashtree is disabled, skip Hashtree setup for /system
-dsu-permissive：已将 DSU system_gsi 的 first-stage verity 表替换为 linear（/dev/block/dm-16，... sectors）
+dsu-permissive：DSU system_gsi 的 first-stage verity 表已按刷入配置伪装为 linear（/dev/block/dm-16，target ...→... sectors）
 dsu-permissive：已为 vivo vfcheck 临时注入 veritymode=disabled
 dsu-permissive：DSU booted 标记有效，已为 PID 1 注入 permissive bootconfig
 dsu-permissive：已通过 SELinux 原始 enforce 接口执行一次启动期 permissive
@@ -115,7 +115,7 @@ dsu-permissive：Hook 已注销（PID 1 已进入 second_stage，vbmeta ...，�
 getenforce → Permissive
 ```
 
-修改 flags 会破坏签名或摘要，因此出现对应验证错误是预期中间状态；最终必须继续到 `HashtreeDisabled`，不能停在 `AvbHandle::Open()` 失败。模块只在 first-stage 临时提供 `orange`，并只在 `selinux_setup` 临时提供 `veritymode=disabled`；second-stage 的 `ro.boot.verifiedbootstate` 与 `ro.boot.veritymode` 应保持 bootloader 提供的原始状态。vivo 日志中不应再出现 `vfcheck do check critical files`、`vfcheck will reboot survival` 或 `boot-survival`。
+修改 flags 会破坏签名或摘要，因此出现对应验证错误是预期中间状态；最终必须继续到 `HashtreeDisabled`，不能停在 `AvbHandle::Open()` 失败。模块只在 first-stage 临时提供 `orange`，并只在 `selinux_setup` 临时提供 `veritymode=disabled`；second-stage 的 `ro.boot.verifiedbootstate` 与 `ro.boot.veritymode` 应保持 bootloader 提供的原始状态。开启 `verity_table_spoof=1` 时，每个命中的 GSI verity 表都应出现 linear 替换日志；关闭时则不应出现该日志。vivo 日志中不应再出现 `vfcheck do check critical files`、`vfcheck will reboot survival` 或 `boot-survival`。
 
 还应在启动前后比较 vbmeta 分区原始 header 或完整哈希，确认磁盘 flags 没有变化。DSU 中由同一顶层 AVB handle 管理的 system、vendor、odm 等条目可能都出现 `Top-level vbmeta is disabled`，这是该方案的预期作用范围。
 

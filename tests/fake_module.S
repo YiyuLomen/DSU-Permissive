@@ -11,6 +11,7 @@
 	.asciz "dsu_config_path=/dsu_permissive.conf"
 	.asciz "parm=selinux_intercept:bool"
 	.asciz "parm=avb_intercept:bool"
+	.asciz "parm=verity_table_spoof:bool"
 	.ascii "dsu_ddk_target="
 	.asciz TEST_DDK_TARGET
 	.asciz "import_ns=ANDROID_GKI_VFS_EXPORT_ONLY"

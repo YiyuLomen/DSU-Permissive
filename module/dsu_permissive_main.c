@@ -7,6 +7,7 @@
 
 #include "bootconfig_proxy.h"
 #include "dm_ioctl_proxy.h"
+#include "dsu_config.h"
 #include "dsu_permissive.h"
 #include "exec_gate.h"
 #include "selinux_enforce_proxy.h"
@@ -164,7 +165,8 @@ static int __init dsu_permissive_init(void)
 
 	schedule_delayed_work(&timeout_work,
 			      msecs_to_jiffies(HOOK_TIMEOUT_SECONDS * 1000U));
-	pr_info("dsu-permissive：模块已加载，等待 first-stage DSU AVB 与 selinux_setup\n");
+	pr_info("dsu-permissive：模块已加载，等待 first-stage DSU AVB 与 selinux_setup（verity table 伪造 %s）\n",
+		dsu_config_verity_table_spoof() ? "开启" : "关闭");
 	return 0;
 }
 
@@ -194,4 +196,4 @@ MODULE_INFO(dsu_config_path, "/dsu_permissive.conf");
 MODULE_INFO(dsu_ddk_target, DSU_DDK_TARGET);
 MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
-MODULE_VERSION("0.6.1");
+MODULE_VERSION("0.7.0");
