@@ -15,58 +15,65 @@ jobs:
     steps:
 
 
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
 
 
 
     - name: Install dependencies
       run: |
-
         sudo apt update
-
         sudo apt install -y \
           cpio \
           gzip \
           unzip \
           file \
-          wget \
-          curl
+          curl \
+          wget
 
 
 
-    # 使用项目自带脚本获取 magiskboot
-    - name: Prepare magiskboot
+    - name: Get magiskboot
       run: |
 
         chmod +x tools/fetch-static-magiskboot.sh
 
 
-        echo "Fetching magiskboot..."
+        echo "Running fetch script..."
 
 
-        bash tools/fetch-static-magiskboot.sh > magiskboot_path.txt
+        bash tools/fetch-static-magiskboot.sh
 
 
-        MAGISKBOOT=$(cat magiskboot_path.txt | tail -n 1)
+
+        echo "Searching magiskboot..."
 
 
-        echo "Detected magiskboot:"
-        echo "$MAGISKBOOT"
+        find /tmp $HOME . -type f -name magiskboot 2>/dev/null || true
+
+
+
+        MAGISKBOOT=$(find /tmp $HOME . -type f -name magiskboot 2>/dev/null | head -n 1)
+
+
+        if [ -z "$MAGISKBOOT" ]; then
+
+          echo "magiskboot not found"
+
+          exit 1
+
+        fi
+
+
+
+        echo "Found: $MAGISKBOOT"
 
 
         cp "$MAGISKBOOT" ./magiskboot
 
 
-        chmod +x ./magiskboot
+        chmod 755 ./magiskboot
 
-
-
-    # 检查工具架构
-    - name: Check magiskboot
-      run: |
-
-        echo "===== magiskboot ====="
 
         ls -lh ./magiskboot
 
@@ -74,47 +81,49 @@ jobs:
         file ./magiskboot
 
 
-        echo "===== test ====="
+
+    - name: Check environment
+      run: |
+
+        echo "Current directory:"
+        pwd
+
+
+        echo "Files:"
+        ls -lh
+
+
+        echo "Test magiskboot:"
+
 
         ./magiskboot --help || true
 
 
 
-    # 检查输入文件
-    - name: Check files
+    - name: Check input
       run: |
 
-        echo "===== files ====="
+        test -f init_boot.img || exit 1
+
+        test -f dsuinit || exit 1
+
+        test -f dsu_permissive-android15-6.6.ko || exit 1
 
 
-        ls -lh
-
-
-        echo "===== init_boot ====="
-
-        file init_boot.img
-
-
-        echo "===== loader ====="
-
-        file dsuinit
-
-
-        echo "===== module ====="
-
-        file dsu_permissive-android15-6.6.ko
+        ls -lh init_boot.img
+        ls -lh dsuinit
+        ls -lh dsu_permissive-android15-6.6.ko
 
 
 
-    # 开始修改 init_boot
     - name: Patch init_boot
       run: |
 
-
         chmod +x tools/patch-init-boot-android.sh
-
-
         chmod +x dsuinit
+
+
+        ls -lh magiskboot
 
 
         bash tools/patch-init-boot-android.sh \
@@ -129,22 +138,7 @@ jobs:
 
 
 
-    # 验证生成文件
-    - name: Verify output
-      run: |
-
-        echo "===== result ====="
-
-
-        ls -lh init_boot_dsu.img
-
-
-        file init_boot_dsu.img
-
-
-
-    # 上传
-    - name: Upload image
+    - name: Upload
       uses: actions/upload-artifact@v4
 
       with:
