@@ -1,4 +1,4 @@
-name: Build DSU init_boot
+name: Patch init_boot DSU
 
 
 on:
@@ -14,35 +14,57 @@ jobs:
 
     steps:
 
+
     - name: Checkout
       uses: actions/checkout@v4
 
 
-    - name: Install tools
+
+    - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y cpio gzip unzip file
+        sudo apt install -y cpio gzip unzip file wget
 
 
-    - name: Prepare magiskboot
+
+    # 获取 x86_64 magiskboot
+    - name: Download magiskboot
       run: |
 
-        chmod +x tools/fetch-static-magiskboot.sh
+        wget -O magiskboot \
+        https://raw.githubusercontent.com/KernelSU-Next/MagiskBoot/main/bin/x86_64/magiskboot
 
-        MAGISKBOOT=$(bash tools/fetch-static-magiskboot.sh)
-
-        echo "magiskboot=$MAGISKBOOT"
-
-        cp "$MAGISKBOOT" ./magiskboot
-
-        chmod +x ./magiskboot
-
-        file ./magiskboot
+        chmod +x magiskboot
 
 
+    # 检查 magiskboot
+    - name: Check magiskboot
+      run: |
 
+        ls -lh magiskboot
+
+        file magiskboot
+
+        ./magiskboot --help || true
+
+
+
+    # 检查文件
+    - name: Check input files
+      run: |
+
+        ls -lh
+
+        file init_boot.img
+
+        file dsuinit
+
+        file dsu_permissive-android15-6.6.ko
+
+
+
+    # 开始修改 init_boot
     - name: Patch init_boot
-
       run: |
 
         chmod +x tools/patch-init-boot-android.sh
@@ -62,19 +84,18 @@ jobs:
 
 
 
-    - name: Verify
-
+    # 验证
+    - name: Verify result
       run: |
 
-        chmod +x tools/verify-init-boot.sh
+        ls -lh init_boot_dsu.img
 
-        tools/verify-init-boot.sh \
-        --input ./init_boot_dsu.img
-
+        file init_boot_dsu.img
 
 
-    - name: Upload
 
+    # 上传结果
+    - name: Upload init_boot_dsu
       uses: actions/upload-artifact@v4
 
       with:
