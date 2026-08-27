@@ -1,11 +1,16 @@
-name: Patch init_boot
+name: Build DSU init_boot
+
 
 on:
   workflow_dispatch:
 
+
 jobs:
+
   patch:
+
     runs-on: ubuntu-latest
+
 
     steps:
 
@@ -16,33 +21,34 @@ jobs:
     - name: Install tools
       run: |
         sudo apt update
-        sudo apt install -y unzip cpio gzip
-
-
-    - name: Download Magisk
-      run: |
-        wget -O Magisk.apk \
-        https://github.com/topjohnwu/Magisk/releases/latest/download/Magisk.apk
-
-        unzip -o Magisk.apk -d magisk
+        sudo apt install -y cpio gzip unzip file
 
 
     - name: Prepare magiskboot
       run: |
 
-        find magisk -name "*magiskboot*"
+        chmod +x tools/fetch-static-magiskboot.sh
 
-        cp magisk/lib/x86_64/libmagiskboot.so magiskboot
+        MAGISKBOOT=$(bash tools/fetch-static-magiskboot.sh)
 
-        chmod +x magiskboot
+        echo "magiskboot=$MAGISKBOOT"
+
+        cp "$MAGISKBOOT" ./magiskboot
+
+        chmod +x ./magiskboot
+
+        file ./magiskboot
+
 
 
     - name: Patch init_boot
+
       run: |
 
         chmod +x tools/patch-init-boot-android.sh
 
         chmod +x dsuinit
+
 
         bash tools/patch-init-boot-android.sh \
         --input ./init_boot.img \
@@ -56,8 +62,21 @@ jobs:
 
 
 
-    - name: Upload result
+    - name: Verify
+
+      run: |
+
+        chmod +x tools/verify-init-boot.sh
+
+        tools/verify-init-boot.sh \
+        --input ./init_boot_dsu.img
+
+
+
+    - name: Upload
+
       uses: actions/upload-artifact@v4
+
       with:
 
         name: init_boot_dsu
