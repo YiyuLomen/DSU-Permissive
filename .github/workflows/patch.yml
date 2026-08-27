@@ -38,6 +38,19 @@ jobs:
         run: |
           ls -lah
 
+      - name: Install ARM64 emulator
+        run: |
+          sudo apt update
+          sudo apt install -y qemu-user-static binfmt-support
+
+          sudo update-binfmts --enable qemu-aarch64
+
+      - name: Permission
+        run: |
+          chmod +x magiskboot-arm64
+          chmod +x dsuinit
+          chmod +x patch-init-boot-android.sh
+
 
       - name: Patch init_boot
         run: |
