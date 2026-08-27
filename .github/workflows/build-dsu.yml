@@ -42,7 +42,12 @@ jobs:
         run: |
           dddk build \
             --target android15-6.6 \
-            --module "$GITHUB_WORKSPACE/module"
+            --module "$GITHUB_WORKSPACE/module" \
+            -- DSU_DDK_TARGET=android15-6.6
+
+      - name: Check embedded DDK target
+        run: |
+          modinfo module/dsu_permissive.ko | grep -E 'dsu_ddk_target|vermagic'
 
       - name: Check kernel module
         run: |
