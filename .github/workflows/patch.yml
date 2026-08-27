@@ -15,49 +15,92 @@ jobs:
     steps:
 
 
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
 
 
 
     - name: Install dependencies
       run: |
+
         sudo apt update
-        sudo apt install -y cpio gzip unzip file wget
+
+        sudo apt install -y \
+          cpio \
+          gzip \
+          unzip \
+          file \
+          wget \
+          curl
 
 
 
-    # 获取 x86_64 magiskboot
-    - name: Download magiskboot
+    # 使用项目自带脚本获取 magiskboot
+    - name: Prepare magiskboot
       run: |
 
-        wget -O magiskboot \
-        https://raw.githubusercontent.com/KernelSU-Next/MagiskBoot/main/bin/x86_64/magiskboot
-
-        chmod +x magiskboot
+        chmod +x tools/fetch-static-magiskboot.sh
 
 
-    # 检查 magiskboot
+        echo "Fetching magiskboot..."
+
+
+        bash tools/fetch-static-magiskboot.sh > magiskboot_path.txt
+
+
+        MAGISKBOOT=$(cat magiskboot_path.txt | tail -n 1)
+
+
+        echo "Detected magiskboot:"
+        echo "$MAGISKBOOT"
+
+
+        cp "$MAGISKBOOT" ./magiskboot
+
+
+        chmod +x ./magiskboot
+
+
+
+    # 检查工具架构
     - name: Check magiskboot
       run: |
 
-        ls -lh magiskboot
+        echo "===== magiskboot ====="
 
-        file magiskboot
+        ls -lh ./magiskboot
+
+
+        file ./magiskboot
+
+
+        echo "===== test ====="
 
         ./magiskboot --help || true
 
 
 
-    # 检查文件
-    - name: Check input files
+    # 检查输入文件
+    - name: Check files
       run: |
+
+        echo "===== files ====="
+
 
         ls -lh
 
+
+        echo "===== init_boot ====="
+
         file init_boot.img
 
+
+        echo "===== loader ====="
+
         file dsuinit
+
+
+        echo "===== module ====="
 
         file dsu_permissive-android15-6.6.ko
 
@@ -67,35 +110,41 @@ jobs:
     - name: Patch init_boot
       run: |
 
+
         chmod +x tools/patch-init-boot-android.sh
+
 
         chmod +x dsuinit
 
 
         bash tools/patch-init-boot-android.sh \
-        --input ./init_boot.img \
-        --output ./init_boot_dsu.img \
-        --loader ./dsuinit \
-        --module ./dsu_permissive-android15-6.6.ko \
-        --selinux 1 \
-        --avb 1 \
-        --verity-table-spoof 1 \
-        --magiskboot ./magiskboot
+          --input ./init_boot.img \
+          --output ./init_boot_dsu.img \
+          --loader ./dsuinit \
+          --module ./dsu_permissive-android15-6.6.ko \
+          --selinux 1 \
+          --avb 1 \
+          --verity-table-spoof 1 \
+          --magiskboot ./magiskboot
 
 
 
-    # 验证
-    - name: Verify result
+    # 验证生成文件
+    - name: Verify output
       run: |
 
+        echo "===== result ====="
+
+
         ls -lh init_boot_dsu.img
+
 
         file init_boot_dsu.img
 
 
 
-    # 上传结果
-    - name: Upload init_boot_dsu
+    # 上传
+    - name: Upload image
       uses: actions/upload-artifact@v4
 
       with:
