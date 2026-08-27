@@ -38,11 +38,18 @@ jobs:
         run: |
           ls -lah
 
+      - name: Setup ARM64 runtime
+        run: |
+          sudo apt update
+          sudo apt install -y qemu-user-static binfmt-support libc6-arm64-cross
+          sudo cp /usr/aarch64-linux-gnu/lib/ld-linux-aarch64.so.1 /lib/
+          sudo mkdir -p /lib/aarch64-linux-gnu
+          sudo cp -r /usr/aarch64-linux-gnu/lib/* /lib/aarch64-linux-gnu/
+
       - name: Install ARM64 emulator
         run: |
           sudo apt update
           sudo apt install -y qemu-user-static binfmt-support
-
           sudo update-binfmts --enable qemu-aarch64
 
       - name: Permission
