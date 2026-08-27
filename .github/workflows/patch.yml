@@ -1,120 +1,70 @@
-name: Patch init_boot DSU
-
+name: Patch init_boot with DSU-Permissive
 
 on:
   workflow_dispatch:
 
-
 jobs:
-
   patch:
-
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-22.04
 
     steps:
 
-
-    - name: Checkout
-      uses: actions/checkout@v4
-
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
 
-    - name: Install tools
-      run: |
+      - name: Install dependencies
+        run: |
+          sudo apt update
 
-        sudo apt update
-
-        sudo apt install -y \
-          wget \
-          unzip \
-          file \
-          cpio \
-          gzip
-
+          sudo apt install -y \
+            python3 \
+            cpio \
+            lz4 \
+            zstd \
+            unzip
 
 
-    - name: Download Magisk source
-      run: |
-
-        wget -O Magisk.apk \
-        https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk.apk
-
-
-        mkdir magisk
-
-
-        unzip -o Magisk.apk -d magisk
+      - name: Give permission
+        run: |
+          chmod +x \
+          magiskboot-arm64 \
+          dsuinit \
+          patch-init-boot-android.sh \
+          repatch-init-boot-config-android.sh
 
 
-
-    - name: Find magiskboot
-      run: |
-
-        echo "Searching..."
+      - name: Check files
+        run: |
+          ls -lah
 
 
-        find magisk -type f | head -50
+      - name: Patch init_boot
+        run: |
+
+          ./patch-init-boot-android.sh \
+          init_boot.img \
+          init_boot_dsu.img \
+          dsuinit \
+          dsu_permissive-android15-6.6.ko \
+          magiskboot-arm64
 
 
+      - name: Repatch bootconfig
+        run: |
 
-    - name: Prepare magiskboot
-      run: |
-
-        mkdir -p magiskboot_tmp
-
-
-        unzip -o Magisk.apk \
-        "lib/x86_64/libmagiskboot.so" \
-        -d magiskboot_tmp || true
+          ./repatch-init-boot-config-android.sh \
+          init_boot_dsu.img
 
 
-        find magiskboot_tmp
+      - name: Check output
+        run: |
+          ls -lah
 
 
-
-        cp $(find magiskboot_tmp -name libmagiskboot.so) magiskboot
-
-
-        chmod +x magiskboot
-
-
-        file magiskboot
-
-
-
-    - name: Check
-      run: |
-
-        ./magiskboot --help || true
-
-
-
-    - name: Patch init_boot
-      run: |
-
-        chmod +x tools/patch-init-boot-android.sh
-
-        chmod +x dsuinit
-
-
-        bash tools/patch-init-boot-android.sh \
-        --input ./init_boot.img \
-        --output ./init_boot_dsu.img \
-        --loader ./dsuinit \
-        --module ./dsu_permissive-android15-6.6.ko \
-        --selinux 1 \
-        --avb 1 \
-        --verity-table-spoof 1 \
-        --magiskboot ./magiskboot
-
-
-
-    - name: Upload
-      uses: actions/upload-artifact@v4
-
-      with:
-
-        name: init_boot_dsu
-
-        path: init_boot_dsu.img
+      - name: Upload patched image
+        uses: actions/upload-artifact@v4
+        with:
+          name: init_boot_dsu
+          path: |
+            init_boot_dsu.img
