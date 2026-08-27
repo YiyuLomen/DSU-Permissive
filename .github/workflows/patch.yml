@@ -8,44 +8,58 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
 
-      - name: Install tools
-        run: |
-          sudo apt update
-          sudo apt install -y unzip cpio gzip
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Download Magisk
-        run: |
-          wget -O Magisk.apk https://github.com/topjohnwu/Magisk/releases/latest/download/Magisk.apk
-          unzip -o Magisk.apk -d magisk
 
-      - name: Find magiskboot
-        run: |
-          find magisk -name "*magiskboot*"
+    - name: Install tools
+      run: |
+        sudo apt update
+        sudo apt install -y unzip cpio gzip
 
-      - name: Patch
-        run: |
-          chmod +x tools/*.sh
 
-          chmod +x magisk/lib/x86_64/libmagiskboot.so
+    - name: Download Magisk
+      run: |
+        wget -O Magisk.apk \
+        https://github.com/topjohnwu/Magisk/releases/latest/download/Magisk.apk
 
-          cp magisk/lib/x86_64/libmagiskboot.so magiskboot
+        unzip -o Magisk.apk -d magisk
 
-          chmod +x magiskboot
 
-          bash tools/patch-init-boot-android.sh \
-          --input init_boot.img \
-          --output init_boot_dsu.img \
-          --loader ./loader/dsuinit \
-          --module ./out/dsu_permissive-android15-6.6.ko \
-          --selinux 1 \
-          --avb 1 \
-          --verity-table-spoof 1 \
-          --magiskboot ./magiskboot
+    - name: Prepare magiskboot
+      run: |
 
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: init_boot_dsu
-          path: init_boot_dsu.img
+        find magisk -name "*magiskboot*"
+
+        cp magisk/lib/x86_64/libmagiskboot.so magiskboot
+
+        chmod +x magiskboot
+
+
+    - name: Patch init_boot
+      run: |
+
+        chmod +x tools/patch-init-boot-android.sh
+
+        chmod +x dsuinit
+
+        bash tools/patch-init-boot-android.sh \
+        --input ./init_boot.img \
+        --output ./init_boot_dsu.img \
+        --loader ./dsuinit \
+        --module ./dsu_permissive-android15-6.6.ko \
+        --selinux 1 \
+        --avb 1 \
+        --verity-table-spoof 1 \
+        --magiskboot ./magiskboot
+
+
+
+    - name: Upload result
+      uses: actions/upload-artifact@v4
+      with:
+
+        name: init_boot_dsu
+
+        path: init_boot_dsu.img
