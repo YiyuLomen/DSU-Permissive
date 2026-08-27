@@ -1,0 +1,101 @@
+name: Build DSU-Permissive
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            llvm \
+            lld \
+            python3 \
+            cpio \
+            gzip \
+            unzip \
+            bc \
+            rsync
+
+      - name: Install dddk
+        run: |
+          curl -fsSL \
+            https://raw.githubusercontent.com/feicong/droid-ddk/main/host/install.sh \
+            | sudo bash
+
+          dddk --help
+
+      - name: Pull Android 15 6.6 DDK
+        run: |
+          dddk pull --target android15-6.6
+
+      - name: Build dsu_permissive.ko
+        run: |
+          dddk build \
+            --target android15-6.6 \
+            --module "$GITHUB_WORKSPACE/module"
+
+      - name: Check kernel module
+        run: |
+          ls -lh module/dsu_permissive.ko
+          file module/dsu_permissive.ko
+
+      - name: Build loader
+        run: |
+          make -C loader
+
+      - name: Fetch magiskboot
+        run: |
+          chmod +x tools/fetch-static-magiskboot.sh
+          MAGISKBOOT_PATH="$(tools/fetch-static-magiskboot.sh)"
+          mkdir -p out
+          cp "$MAGISKBOOT_PATH" out/magiskboot-arm64
+          chmod 0755 out/magiskboot-arm64
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p out
+
+          cp module/dsu_permissive.ko \
+            out/dsu_permissive-android15-6.6.ko
+
+          cp loader/dsuinit out/dsuinit
+
+          cp tools/patch-init-boot-android.sh \
+            out/patch-init-boot-android.sh
+
+          cp tools/repatch-init-boot-config-android.sh \
+            out/repatch-init-boot-config-android.sh
+
+          chmod 0755 \
+            out/patch-init-boot-android.sh \
+            out/repatch-init-boot-config-android.sh
+
+      - name: Verify artifacts
+        run: |
+          chmod +x tools/verify-artifacts.sh
+
+          tools/verify-artifacts.sh \
+            --loader "$GITHUB_WORKSPACE/out/dsuinit" \
+            --module "$GITHUB_WORKSPACE/out/dsu_permissive-android15-6.6.ko" \
+            --target android15-6.6
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsu-permissive-android15-6.6
+          path: |
+            out/dsu_permissive-android15-6.6.ko
+            out/dsuinit
+            out/magiskboot-arm64
+            out/patch-init-boot-android.sh
+            out/repatch-init-boot-config-android.sh
