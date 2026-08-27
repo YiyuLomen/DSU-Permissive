@@ -20,99 +20,73 @@ jobs:
 
 
 
-    - name: Install dependencies
+    - name: Install tools
       run: |
+
         sudo apt update
+
         sudo apt install -y \
-          cpio \
-          gzip \
+          wget \
           unzip \
           file \
-          curl \
-          wget
+          cpio \
+          gzip
 
 
 
-    - name: Get magiskboot
+    - name: Download Magisk source
       run: |
 
-        chmod +x tools/fetch-static-magiskboot.sh
+        wget -O Magisk.apk \
+        https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk.apk
 
 
-        echo "Running fetch script..."
+        mkdir magisk
 
 
-        bash tools/fetch-static-magiskboot.sh
-
-
-
-        echo "Searching magiskboot..."
-
-
-        find /tmp $HOME . -type f -name magiskboot 2>/dev/null || true
+        unzip -o Magisk.apk -d magisk
 
 
 
-        MAGISKBOOT=$(find /tmp $HOME . -type f -name magiskboot 2>/dev/null | head -n 1)
-
-
-        if [ -z "$MAGISKBOOT" ]; then
-
-          echo "magiskboot not found"
-
-          exit 1
-
-        fi
-
-
-
-        echo "Found: $MAGISKBOOT"
-
-
-        cp "$MAGISKBOOT" ./magiskboot
-
-
-        chmod 755 ./magiskboot
-
-
-        ls -lh ./magiskboot
-
-
-        file ./magiskboot
-
-
-
-    - name: Check environment
+    - name: Find magiskboot
       run: |
 
-        echo "Current directory:"
-        pwd
+        echo "Searching..."
 
 
-        echo "Files:"
-        ls -lh
+        find magisk -type f | head -50
 
 
-        echo "Test magiskboot:"
 
+    - name: Prepare magiskboot
+      run: |
+
+        mkdir -p magiskboot_tmp
+
+
+        unzip -o Magisk.apk \
+        "lib/x86_64/libmagiskboot.so" \
+        -d magiskboot_tmp || true
+
+
+        find magiskboot_tmp
+
+
+
+        cp $(find magiskboot_tmp -name libmagiskboot.so) magiskboot
+
+
+        chmod +x magiskboot
+
+
+        file magiskboot
+
+
+
+    - name: Check
+      run: |
 
         ./magiskboot --help || true
-
-
-
-    - name: Check input
-      run: |
-
-        test -f init_boot.img || exit 1
-
-        test -f dsuinit || exit 1
-
-        test -f dsu_permissive-android15-6.6.ko || exit 1
-
-
-        ls -lh init_boot.img
-        ls -lh dsuinit
-        ls -lh dsu_permissive-android15-6.6.ko
 
 
 
@@ -120,21 +94,19 @@ jobs:
       run: |
 
         chmod +x tools/patch-init-boot-android.sh
+
         chmod +x dsuinit
 
 
-        ls -lh magiskboot
-
-
         bash tools/patch-init-boot-android.sh \
-          --input ./init_boot.img \
-          --output ./init_boot_dsu.img \
-          --loader ./dsuinit \
-          --module ./dsu_permissive-android15-6.6.ko \
-          --selinux 1 \
-          --avb 1 \
-          --verity-table-spoof 1 \
-          --magiskboot ./magiskboot
+        --input ./init_boot.img \
+        --output ./init_boot_dsu.img \
+        --loader ./dsuinit \
+        --module ./dsu_permissive-android15-6.6.ko \
+        --selinux 1 \
+        --avb 1 \
+        --verity-table-spoof 1 \
+        --magiskboot ./magiskboot
 
 
 
