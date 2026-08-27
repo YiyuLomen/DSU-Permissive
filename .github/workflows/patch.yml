@@ -43,11 +43,14 @@ jobs:
         run: |
 
           ./patch-init-boot-android.sh \
-          init_boot.img \
-          init_boot_dsu.img \
-          dsuinit \
-          dsu_permissive-android15-6.6.ko \
-          magiskboot-arm64
+          --input init_boot.img \
+          --output init_boot_dsu.img \
+          --loader dsuinit \
+          --module dsu_permissive-android15-6.6.ko \
+          --selinux 1 \
+          --avb 1 \
+          --verity-table-spoof 1 \
+          --magiskboot ./magiskboot-arm64
 
 
       - name: Repatch bootconfig
