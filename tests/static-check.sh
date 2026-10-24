@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/dsu-static-check.XXXXXX")
+trap 'rm -rf -- "$work_dir"' EXIT
+cd "$root_dir"
+
+for script in tools/*.sh tests/*.sh; do
+    bash -n "$script"
+done
+sh -n tools/patch-init-boot-android.sh
+sh -n tools/repatch-init-boot-config-android.sh
+sh -n tools/android-flasher-template.sh
+if command -v shellcheck >/dev/null 2>&1; then
+    shellcheck -x tools/fetch-static-magiskboot.sh \
+        tools/generate-android-flasher.sh \
+        tests/test-android-flasher-generator.sh \
+        tests/test-image-roundtrip.sh tools/build.sh
+    shellcheck -s sh tools/android-flasher-template.sh \
+        tools/patch-init-boot-android.sh \
+        tools/repatch-init-boot-config-android.sh
+fi
+expected_config=$'selinux_intercept=0\navb_intercept=1\nverity_table_spoof=0'
+actual_config=$(<config/dsu_permissive.conf)
+if [[ "$actual_config" != "$expected_config" ]]; then
+    echo "错误：默认统一配置内容不符合预期" >&2
+    exit 1
+fi
+expected_targets=$'android12-5.10\nandroid13-5.10\nandroid13-5.15\nandroid14-5.15\nandroid14-6.1\nandroid15-6.6\nandroid16-6.12'
+actual_targets=$(tools/build.sh --list-targets | cut -f1)
+if [[ "$actual_targets" != "$expected_targets" ]]; then
+    echo "错误：DDK 支持矩阵与预期不一致" >&2
+    exit 1
+fi
+if tools/build.sh --target android11-5.4 >/dev/null 2>&1; then
+    echo "错误：构建脚本接受了非支持的 GKI target" >&2
+    exit 1
+fi
+python3 tests/make-test-init-boot.py --help >/dev/null
+python3 tests/test-avb-header-range.py
+python3 tests/test-dm-ioctl-bypass.py
+python3 tests/test-bootconfig-parser.py
+python3 tests/test-enforcement-flow.py
+python3 tests/test-unified-config.py
+tests/test-android-flasher-generator.sh
+make -C loader clean all
+
+# Keep every new module-parameter accessor visible to its caller in the
+# earliest host-side check.  The actual declaration is otherwise only caught
+# when a target DDK builds the kernel module.
+if ! rg -q '^#include "dsu_config\.h"$' module/dsu_permissive_main.c ||
+   ! rg -q 'dsu_config_verity_table_spoof\(\)' module/dsu_permissive_main.c; then
+    echo "错误：主模块的 dm-verity 表伪造配置声明或调用缺失" >&2
+    exit 1
+fi
+
+if llvm-readelf -l loader/dsuinit | grep -q INTERP; then
+    echo "错误：dsuinit 含动态解释器" >&2
+    exit 1
+fi
+if [[ -n "$(llvm-nm -u loader/dsuinit 2>/dev/null)" ]]; then
+    echo "错误：dsuinit 含未解析符号" >&2
+    exit 1
+fi
+
+clang --target=aarch64-linux-gnu -c tests/fake_module.S \
+    -o "$work_dir/valid-module.ko"
+tools/verify-artifacts.sh \
+    --loader loader/dsuinit \
+    --module "$work_dir/valid-module.ko" \
+    --target android16-6.12 >/dev/null
+clang --target=aarch64-linux-gnu \
+    -DTEST_OMIT_INTERNAL_VFS_NAMESPACE \
+    -c tests/fake_module.S -o "$work_dir/missing-vfs-namespace-module.ko"
+if tools/verify-artifacts.sh \
+    --loader loader/dsuinit \
+    --module "$work_dir/missing-vfs-namespace-module.ko" \
+    --target android16-6.12 >/dev/null 2>&1; then
+    echo "错误：产物验证器接受了缺少 kern_path VFS 命名空间的模块" >&2
+    exit 1
+fi
+clang --target=aarch64-linux-gnu \
+    -DTEST_UNDEFINED_SYMBOL=filp_open \
+    -c tests/fake_module.S -o "$work_dir/filp-open-module.ko"
+if tools/verify-artifacts.sh \
+    --loader loader/dsuinit \
+    --module "$work_dir/filp-open-module.ko" \
+    --target android16-6.12 >/dev/null 2>&1; then
+    echo "错误：产物验证器接受了导入 filp_open 的模块" >&2
+    exit 1
+fi
+
+echo "静态检查通过"
