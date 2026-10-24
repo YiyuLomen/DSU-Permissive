@@ -14,7 +14,8 @@ on:
       - 'docs/**'
 
 env:
-  MANIFEST_BRANCH: common-android15-6.6-2026-01
+  KERNEL_BRANCH: android15-6.6-2026-01
+  CLANG_BRANCH: main-kernel-build-2024
   DDK_TARGET: android15-6.6
 
 jobs:
@@ -23,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Restore script exec bits
+        run: chmod +x tests/*.sh tools/*.sh
       - name: Install host tools
         run: |
           sudo apt-get update
@@ -37,39 +40,58 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore script exec bits
+        run: chmod +x tests/*.sh tools/*.sh
+
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl unzip git-core gnupg flex bison \
-            build-essential zlib1g-dev libncurses-dev xz-utils libssl-dev \
-            libxml2 bc cpio python3
-          sudo curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo \
-            -o /usr/local/bin/repo
-          sudo chmod 0755 /usr/local/bin/repo
-          git config --global user.name "ci-builder"
-          git config --global user.email "ci-builder@localhost"
+          sudo apt-get install -y curl unzip flex bison build-essential \
+            zlib1g-dev libncurses-dev xz-utils libssl-dev bc cpio python3 \
+            clang lld llvm dwarves libelf-dev git
 
       - name: Restore GKI source cache
         id: src_cache
         uses: actions/cache/restore@v4
         with:
           path: android-kernel
-          key: gki-src-${{ env.MANIFEST_BRANCH }}-v1
+          key: gki-src-${{ env.KERNEL_BRANCH }}-v2
 
-      - name: Repo sync GKI manifest
+      - name: Download kernel source (android15-6.6-2026-01)
         if: steps.src_cache.outputs.cache-hit != 'true'
         run: |
-          mkdir -p android-kernel
-          cd android-kernel
-          repo init -u https://android.googlesource.com/kernel/manifest \
-            -b "$MANIFEST_BRANCH" --depth=1
-          repo sync -c --no-clone-bundle --no-tags --fail-fast -j"$(nproc)"
+          mkdir -p android-kernel/common
+          curl -fsSL --retry 3 \
+            "https://android.googlesource.com/kernel/common/+archive/refs/heads/${KERNEL_BRANCH}.tar.gz" \
+            | tar -xzf - -C android-kernel/common
+          test -f android-kernel/common/Makefile || {
+            echo "::error::kernel source tree incomplete"; exit 1; }
+
+      - name: Download prebuilt clang
+        if: steps.src_cache.outputs.cache-hit != 'true'
+        run: |
+          clang_ver="$(grep -oP '^CLANG_VERSION=\K\S+' \
+            android-kernel/common/build.config.constants)"
+          test -n "$clang_ver" || {
+            echo "::error::cannot resolve CLANG_VERSION"; exit 1; }
+          echo "Pinned clang: $clang_ver"
+          mkdir -p "android-kernel/prebuilts/clang/host/linux-x86/$clang_ver"
+          curl -fsSL --retry 3 \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/${CLANG_BRANCH}/clang-$clang_ver.tar.gz" \
+            | tar -xzf - -C "android-kernel/prebuilts/clang/host/linux-x86/$clang_ver"
+          test -x "android-kernel/prebuilts/clang/host/linux-x86/$clang_ver/bin/clang" || {
+            echo "::error::prebuilt clang archive incomplete"; exit 1; }
+          df -h "$GITHUB_WORKSPACE"
 
       - name: Put prebuilt clang on PATH
         run: |
-          clang_bin="$(ls -d "$GITHUB_WORKSPACE"/android-kernel/prebuilts/clang/host/linux-x86/clang-* | head -n1)/bin"
-          test -x "$clang_bin/clang"
-          echo "$clang_bin" >> "$GITHUB_PATH"
+          clang_bin="$(ls -d "$GITHUB_WORKSPACE"/android-kernel/prebuilts/clang/host/linux-x86/clang-*/bin 2>/dev/null | sort | tail -n1)"
+          if [ -n "$clang_bin" ] && [ -x "$clang_bin/clang" ]; then
+            echo "$clang_bin" >> "$GITHUB_PATH"
+            echo "Using prebuilt clang: $clang_bin"
+          else
+            echo "::warning::prebuilt clang unavailable; falling back to distro clang"
+          fi
 
       - name: Kernel defconfig + modules_prepare
         run: |
@@ -82,14 +104,14 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: android-kernel
-          key: gki-src-${{ env.MANIFEST_BRANCH }}-v1
+          key: gki-src-${{ env.KERNEL_BRANCH }}-v2
 
       - name: Restore Module.symvers cache
         id: symvers_cache
         uses: actions/cache/restore@v4
         with:
           path: android-kernel/common/Module.symvers
-          key: gki-symvers-${{ env.MANIFEST_BRANCH }}-v1
+          key: gki-symvers-${{ env.KERNEL_BRANCH }}-v2
 
       - name: Build kernel for Module.symvers (first run / forced)
         if: >
@@ -99,13 +121,15 @@ jobs:
           cd android-kernel/common
           # 完整 vmlinux 构建的唯一目的：产出与 KMI 冻结分支一致的 Module.symvers
           make -j"$(nproc)" ARCH=arm64 LLVM=1 LLVM_IAS=1
+          test -f Module.symvers || {
+            echo "::error::Module.symvers missing after kernel build"; exit 1; }
 
       - name: Save Module.symvers cache
         if: steps.symvers_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: android-kernel/common/Module.symvers
-          key: gki-symvers-${{ env.MANIFEST_BRANCH }}-v1
+          key: gki-symvers-${{ env.KERNEL_BRANCH }}-v2
 
       - name: Build dsu_permissive.ko
         run: |
