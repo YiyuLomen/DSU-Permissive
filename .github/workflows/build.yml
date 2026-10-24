@@ -31,7 +31,7 @@ jobs:
         run: tests/static-check.sh
 
   build:
-    name: module ${{ env.DDK_TARGET }}
+    name: module android15-6.6
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
