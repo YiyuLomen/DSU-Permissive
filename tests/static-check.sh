@@ -13,11 +13,13 @@ sh -n tools/patch-init-boot-android.sh
 sh -n tools/repatch-init-boot-config-android.sh
 sh -n tools/android-flasher-template.sh
 if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -x tools/fetch-static-magiskboot.sh \
+    # dash fork：--severity=warning 过滤上游代码的 info/style 级提示，
+    # 避免 shellcheck 版本漂移导致 checks job 随机失败。
+    shellcheck -x --severity=warning tools/fetch-static-magiskboot.sh \
         tools/generate-android-flasher.sh \
         tests/test-android-flasher-generator.sh \
         tests/test-image-roundtrip.sh tools/build.sh
-    shellcheck -s sh tools/android-flasher-template.sh \
+    shellcheck -s sh --severity=warning tools/android-flasher-template.sh \
         tools/patch-init-boot-android.sh \
         tools/repatch-init-boot-config-android.sh
 fi
